@@ -24,6 +24,7 @@ export function useApi(): ApiClient {
 
 /** The hooks need the cache's internal `peek`, which is not part of the public `QueryCache` contract. */
 export function internalCache(client: ApiClient): QueryCacheImpl {
-  if (!(client.cache instanceof QueryCacheImpl)) throw new Error('This ApiClient was not made by createApiClient.');
+  if (!(client.cache instanceof QueryCacheImpl))
+    throw new Error('This ApiClient was not made by createApiClient.');
   return client.cache;
 }

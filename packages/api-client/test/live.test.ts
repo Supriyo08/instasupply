@@ -80,7 +80,9 @@ test('a topic added while open goes out in one frame per tick; the last listener
   await kit.clock.advance(1);
   const unsubscribes = framesOfType(kit, 'unsubscribe');
   assert.equal(unsubscribes.length, 1);
-  assert.deepEqual(unsubscribes[0]?.frame.type === 'unsubscribe' && unsubscribes[0].frame.topics, ['product:p1']);
+  assert.deepEqual(unsubscribes[0]?.frame.type === 'unsubscribe' && unsubscribes[0].frame.topics, [
+    'product:p1',
+  ]);
   assert.deepEqual(kit.server.subscribedTopics(), ['product:p2']);
   offC();
   kit.client.dispose();

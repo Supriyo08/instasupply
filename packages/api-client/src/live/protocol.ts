@@ -55,10 +55,13 @@ export function parseServerFrame(data: unknown): ServerFrame | null {
       return {
         type: 'subscribed',
         id: typeof value.id === 'number' ? value.id : 0,
-        topics: Array.isArray(value.topics) ? value.topics.filter((t): t is string => typeof t === 'string') : [],
+        topics: Array.isArray(value.topics)
+          ? value.topics.filter((t): t is string => typeof t === 'string')
+          : [],
         denied: Array.isArray(value.denied)
           ? value.denied.filter(
-              (d): d is DeniedTopic => isRecord(d) && typeof d.topic === 'string' && typeof d.reason === 'string',
+              (d): d is DeniedTopic =>
+                isRecord(d) && typeof d.topic === 'string' && typeof d.reason === 'string',
             )
           : [],
       };

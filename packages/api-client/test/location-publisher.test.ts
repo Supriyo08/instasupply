@@ -12,7 +12,9 @@ async function setup() {
   const server = createFakeServer({ clock });
   let offline = false;
   const fetch: typeof globalThis.fetch = (input, init) =>
-    offline && String(input).includes('/me/location') ? Promise.reject(new TypeError('offline')) : server.fetch(input, init);
+    offline && String(input).includes('/me/location')
+      ? Promise.reject(new TypeError('offline'))
+      : server.fetch(input, init);
   const kit = await signedIn({ server, clock, fetch });
   let answer: () => FakeAnswer = () => ({ body: { online: true, serverTime: clock.now() } });
   kit.server.on('POST', '/me/location', () => answer());
@@ -108,7 +110,10 @@ test('30 fixes while offline leave 20 queued and one request when the network re
   const reports = t.reports().slice(sentBefore);
   assert.equal(reports.length, 1);
   assert.equal(reports[0]?.fixes.length, 20);
-  assert.ok((reports[0]?.fixes ?? []).every((f, i, all) => i === 0 || (all[i - 1]?.at ?? 0) <= f.at), 'oldest first');
+  assert.ok(
+    (reports[0]?.fixes ?? []).every((f, i, all) => i === 0 || (all[i - 1]?.at ?? 0) <= f.at),
+    'oldest first',
+  );
   assert.equal(t.publisher.getState().queued, 0);
 });
 
@@ -141,14 +146,23 @@ test('RATE_LIMITED waits details.retryAfterMs', async () => {
   let limited = true;
   t.answerWith(() =>
     limited
-      ? { status: 'resource-exhausted', code: 'RATE_LIMITED', message: 'Slow down.', details: { retryAfterMs: 7_000 } }
+      ? {
+          status: 'resource-exhausted',
+          code: 'RATE_LIMITED',
+          message: 'Slow down.',
+          details: { retryAfterMs: 7_000 },
+        }
       : { body: { online: true, serverTime: 0 } },
   );
   await t.clock.advance(4_000);
   assert.equal(await t.publisher.ingest([t.moved()], { mode: 'live' }), 'queued');
   limited = false;
   await t.clock.advance(6_000);
-  assert.equal(await t.publisher.ingest([t.moved()], { mode: 'live' }), 'queued', 'still inside retryAfterMs');
+  assert.equal(
+    await t.publisher.ingest([t.moved()], { mode: 'live' }),
+    'queued',
+    'still inside retryAfterMs',
+  );
   await t.clock.advance(1_000);
   assert.equal(await t.publisher.ingest([t.moved()], { mode: 'live' }), 'sent');
 });

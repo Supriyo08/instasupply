@@ -177,5 +177,9 @@ export async function uploadFile(deps: UploadDeps, input: UploadInput): Promise<
     input.signal?.removeEventListener('abort', onAbort);
   }
 
-  return deps.rest.post<UploadedFile>('/files/confirm', { uploadId: presigned.uploadId }, { signal: input.signal });
+  return deps.rest.post<UploadedFile>(
+    '/files/confirm',
+    { uploadId: presigned.uploadId },
+    { signal: input.signal },
+  );
 }

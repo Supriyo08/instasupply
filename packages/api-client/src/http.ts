@@ -155,7 +155,11 @@ export class HttpPipeline {
 
     const timeoutMs =
       spec.timeoutMs ??
-      (spec.kind === 'upload' ? timeouts.uploadMs : spec.method === 'GET' ? timeouts.readMs : timeouts.writeMs);
+      (spec.kind === 'upload'
+        ? timeouts.uploadMs
+        : spec.method === 'GET'
+          ? timeouts.readMs
+          : timeouts.writeMs);
     const controller = new AbortController();
     let timedOut = false;
     const timer = clock.setTimeout(() => {
@@ -179,12 +183,27 @@ export class HttpPipeline {
       clock.clearTimeout(timer);
       spec.signal?.removeEventListener('abort', onCallerAbort);
       if (timedOut) {
-        throw new ApiError({ ...base, status: 'deadline-exceeded', message: 'The request timed out.', cause: error });
+        throw new ApiError({
+          ...base,
+          status: 'deadline-exceeded',
+          message: 'The request timed out.',
+          cause: error,
+        });
       }
       if (spec.signal?.aborted) {
-        throw new ApiError({ ...base, status: 'cancelled', message: 'The request was cancelled.', cause: error });
+        throw new ApiError({
+          ...base,
+          status: 'cancelled',
+          message: 'The request was cancelled.',
+          cause: error,
+        });
       }
-      throw new ApiError({ ...base, status: 'unavailable', message: 'No answer from the server.', cause: error });
+      throw new ApiError({
+        ...base,
+        status: 'unavailable',
+        message: 'No answer from the server.',
+        cause: error,
+      });
     }
 
     let text: string;

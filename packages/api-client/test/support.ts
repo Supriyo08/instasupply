@@ -38,6 +38,10 @@ export async function signedIn(options: Parameters<typeof createTestClient>[0] =
 }
 
 /** Requests to one path, for counting. */
-export function requestsTo(kit: { server: { requests: FakeRequest[] } }, method: string, path: string): FakeRequest[] {
+export function requestsTo(
+  kit: { server: { requests: FakeRequest[] } },
+  method: string,
+  path: string,
+): FakeRequest[] {
   return kit.server.requests.filter((request) => request.method === method && request.path === path);
 }

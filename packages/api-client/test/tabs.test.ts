@@ -28,9 +28,12 @@ async function twoTabs() {
   const cache = createMemoryStorage();
   const lock = createMutex();
   const { uid } = server.addAccount({ email: EMAIL, password: PASSWORD, profile: null });
-  server.on('GET', '/thing', (request) => (request.uid ? { body: { ok: true } } : { status: 'unauthenticated', message: 'x' }));
+  server.on('GET', '/thing', (request) =>
+    request.uid ? { body: { ok: true } } : { status: 'unauthenticated', message: 'x' },
+  );
   const tab = () =>
-    createTestClient({ server, clock, secretStorage: secrets, cacheStorage: cache, refreshLock: lock }).client;
+    createTestClient({ server, clock, secretStorage: secrets, cacheStorage: cache, refreshLock: lock })
+      .client;
   const a = tab();
   await a.session.signIn({ email: EMAIL, password: PASSWORD });
   const b = tab();

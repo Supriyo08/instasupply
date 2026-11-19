@@ -1,4 +1,12 @@
-import type { Issue, LedgerEntry, Payout, Product, StoreOrder, StorePrivateSettings, UserProfile } from '@instasupply/shared';
+import type {
+  Issue,
+  LedgerEntry,
+  Payout,
+  Product,
+  StoreOrder,
+  StorePrivateSettings,
+  UserProfile,
+} from '@instasupply/shared';
 
 import type { LedgerBalance, WithId } from '../contract';
 import { catalogPaths } from '../resources/catalog';
@@ -61,9 +69,14 @@ export const supplierQueries = {
 
   storeSettings: (storeId: string | null | undefined) => {
     const id = idOrNull(storeId);
-    return docQuery<StorePrivateSettings>(['store-settings', id], id !== null, () => catalogPaths.storeSettings(id ?? ''), {
-      topics: id ? [topics.store(id)] : [],
-    });
+    return docQuery<StorePrivateSettings>(
+      ['store-settings', id],
+      id !== null,
+      () => catalogPaths.storeSettings(id ?? ''),
+      {
+        topics: id ? [topics.store(id)] : [],
+      },
+    );
   },
 
   /** No `listed` filter: the portal shows inactive rows too. */

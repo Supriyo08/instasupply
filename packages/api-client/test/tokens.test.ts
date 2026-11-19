@@ -28,8 +28,13 @@ test('ten parallel 401s cause one refresh and ten retries', async () => {
   thing(kit);
   kit.server.expireAccessTokens();
   const before = requestsTo(kit, 'POST', '/auth/refresh').length;
-  const results = await Promise.all(Array.from({ length: 10 }, () => kit.client.get<{ ok: boolean }>('/thing')));
-  assert.equal(results.every((r) => r.ok), true);
+  const results = await Promise.all(
+    Array.from({ length: 10 }, () => kit.client.get<{ ok: boolean }>('/thing')),
+  );
+  assert.equal(
+    results.every((r) => r.ok),
+    true,
+  );
   assert.equal(requestsTo(kit, 'POST', '/auth/refresh').length - before, 1);
   assert.equal(requestsTo(kit, 'GET', '/thing').length, 20);
 });
@@ -42,7 +47,8 @@ test('the new session is stored before the new access token is used', async () =
   const secretStorage = {
     ...memory,
     setItem: async (key: string, value: string) => {
-      if (key === STORAGE_KEYS.session && kitRef) sentAtStore.push(requestsTo(kitRef, 'GET', '/thing').length);
+      if (key === STORAGE_KEYS.session && kitRef)
+        sentAtStore.push(requestsTo(kitRef, 'GET', '/thing').length);
       await memory.setItem(key, value);
     },
   };
@@ -97,12 +103,23 @@ for (const [name, setup, reason] of [
     async (kit: Awaited<ReturnType<typeof signedIn>>) => {
       const session = stored(kit);
       assert.ok(session);
-      await kit.secrets.setItem(STORAGE_KEYS.session, JSON.stringify({ ...session, refreshToken: 'isr_unknown' }));
+      await kit.secrets.setItem(
+        STORAGE_KEYS.session,
+        JSON.stringify({ ...session, refreshToken: 'isr_unknown' }),
+      );
     },
     'expired',
   ],
-  ['session_revoked', (kit: Awaited<ReturnType<typeof signedIn>>) => kit.server.revokeSessions(kit.uid, 'session_revoked'), 'revoked'],
-  ['account_suspended', (kit: Awaited<ReturnType<typeof signedIn>>) => kit.server.revokeSessions(kit.uid, 'account_suspended'), 'suspended'],
+  [
+    'session_revoked',
+    (kit: Awaited<ReturnType<typeof signedIn>>) => kit.server.revokeSessions(kit.uid, 'session_revoked'),
+    'revoked',
+  ],
+  [
+    'account_suspended',
+    (kit: Awaited<ReturnType<typeof signedIn>>) => kit.server.revokeSessions(kit.uid, 'account_suspended'),
+    'suspended',
+  ],
 ] as const) {
   test(`a refresh answered with ${name} ends the session (${reason})`, async () => {
     const kit = await signedIn();
@@ -123,7 +140,10 @@ test('a request answered with account_suspended ends the session with endReason 
   const kit = await signedIn();
   thing(kit);
   kit.server.revokeSessions(kit.uid, 'account_suspended');
-  await assert.rejects(kit.client.post('/thing'), (e: unknown) => (e as ApiError).authReason === 'account_suspended');
+  await assert.rejects(
+    kit.client.post('/thing'),
+    (e: unknown) => (e as ApiError).authReason === 'account_suspended',
+  );
   await kit.clock.advance(0);
   assert.equal(kit.client.session.getSnapshot().endReason, 'suspended');
 });

@@ -38,11 +38,19 @@ async function setup() {
   };
   const observation = kit.client.cache.observe(query, { live: false }, () => undefined);
   await kit.clock.advance(0);
-  const runner = new MutationRunner<{ id: string }, void>(kit.client, kit.client.cache as QueryCacheImpl, () => undefined);
+  const runner = new MutationRunner<{ id: string }, void>(
+    kit.client,
+    kit.client.cache as QueryCacheImpl,
+    () => undefined,
+  );
   const add = (id: string) =>
-    runner.run((api, v) => api.favorites.add(v.id), { id }, {
-      optimistic: (cache, v) => cache.patch<Fav[]>(query.key, (list) => [{ id: v.id }, ...list]),
-    });
+    runner.run(
+      (api, v) => api.favorites.add(v.id),
+      { id },
+      {
+        optimistic: (cache, v) => cache.patch<Fav[]>(query.key, (list) => [{ id: v.id }, ...list]),
+      },
+    );
   const ids = () => observation.getResult().data.map((f) => f.id);
   return {
     kit,
@@ -110,7 +118,10 @@ test('two overlapping patches: a failure removes only its own', async () => {
   const second = runner2.run(
     (api, v) => api.favorites.add(v.id),
     { id: 'p3' },
-    { optimistic: (cache, v) => cache.patch<Fav[]>(['favorites', t.kit.uid], (list) => [{ id: v.id }, ...list]) },
+    {
+      optimistic: (cache, v) =>
+        cache.patch<Fav[]>(['favorites', t.kit.uid], (list) => [{ id: v.id }, ...list]),
+    },
   );
   assert.deepEqual(t.ids(), ['p3', 'p2', 'p1']);
   await Promise.allSettled([first, second]);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { QueryObserver } from '../src/query/observer';
-import { QueryCacheImpl } from '../src/query/query-cache';
+import { type QueryCacheImpl } from '../src/query/query-cache';
 import { REFETCH, type QueryDescriptor, type QueryResult } from '../src/query/types';
 import { createTestClient, type FakeAnswer } from '../src/testing';
 
@@ -38,7 +38,11 @@ function counter(kit: Kit, path: string, body: (n: number) => unknown = (n) => (
   return () => n;
 }
 
-function doc<T>(key: string, path: string, extra: Partial<QueryDescriptor<T | null>> = {}): QueryDescriptor<T | null> {
+function doc<T>(
+  key: string,
+  path: string,
+  extra: Partial<QueryDescriptor<T | null>> = {},
+): QueryDescriptor<T | null> {
   return {
     key: [key, 'x'],
     empty: null,
@@ -53,16 +57,21 @@ test('one fetch and one result for N observers of the same key', async () => {
   const kit = await signedIn();
   const fetches = counter(kit, '/orders/x');
   const query = doc<{ n: number }>('order', '/orders/x');
-  const observers = Array.from({ length: 5 }, () => kit.client.cache.observe(query, { live: false }, () => undefined));
+  const observers = Array.from({ length: 5 }, () =>
+    kit.client.cache.observe(query, { live: false }, () => undefined),
+  );
   await kit.clock.advance(0);
   assert.equal(fetches(), 1);
   const results = observers.map((o) => o.getResult());
-  assert.ok(results.every((r) => r === results[0]), 'the same result object');
+  assert.ok(
+    results.every((r) => r === results[0]),
+    'the same result object',
+  );
   assert.deepEqual(results[0]?.data, { n: 1 });
   for (const o of observers) o.unsubscribe();
 });
 
-test('keepPreviousData: a list keeps the previous key\'s data with loading true; a document does not', async () => {
+test("keepPreviousData: a list keeps the previous key's data with loading true; a document does not", async () => {
   const kit = await signedIn();
   const a = controlled(kit, '/lists/a');
   const b = controlled(kit, '/lists/b');
@@ -159,15 +168,26 @@ test('reduce folds payload events; REFETCH asks for a normal refetch', async () 
     topics: ['thread:d1'],
     fetch: ({ client, signal }) => client.get('/threads/d1/messages', { signal }),
     reduce: (current, event) =>
-      event.kind === 'message' && event.data ? [...current, event.data as { id: string; text: string }] : REFETCH,
+      event.kind === 'message' && event.data
+        ? [...current, event.data as { id: string; text: string }]
+        : REFETCH,
   };
   const o = kit.client.cache.observe(query, { live: true }, () => undefined);
   kit.client.start();
   await kit.clock.advance(0);
   const base = fetches();
-  kit.server.emit({ topic: 'thread:d1', kind: 'message', id: 'm2', at: 1, data: { id: 'm2', text: 'there' } });
+  kit.server.emit({
+    topic: 'thread:d1',
+    kind: 'message',
+    id: 'm2',
+    at: 1,
+    data: { id: 'm2', text: 'there' },
+  });
   await kit.clock.advance(0);
-  assert.deepEqual(o.getResult().data.map((m) => m.id), ['m1', 'm2']);
+  assert.deepEqual(
+    o.getResult().data.map((m) => m.id),
+    ['m1', 'm2'],
+  );
   assert.equal(fetches(), base, 'folded without a request');
   kit.server.emit({ topic: 'thread:d1', kind: 'updated', id: 'd1', at: 2 });
   await kit.clock.advance(0);
@@ -191,7 +211,11 @@ test('polling runs only while the socket is not open', async () => {
   await kit.clock.advance(60_000);
   assert.equal(fetches(), atOpen, 'open socket: no polling');
   // A plain (non-live) observer never polls.
-  const plain = kit.client.cache.observe(doc('other', '/orders/x', { pollMs: 1_000 }), { live: false }, () => undefined);
+  const plain = kit.client.cache.observe(
+    doc('other', '/orders/x', { pollMs: 1_000 }),
+    { live: false },
+    () => undefined,
+  );
   kit.client.live.stop();
   await kit.clock.advance(0);
   const stopped = fetches();
@@ -232,7 +256,11 @@ test('error rows: a retryable refetch failure keeps the data; permission-denied 
   const kit = await signedIn();
   let answer: FakeAnswer = { body: { n: 1 } };
   kit.server.on('GET', '/orders/x', () => answer);
-  const o = kit.client.cache.observe(doc<{ n: number }>('order', '/orders/x'), { live: false }, () => undefined);
+  const o = kit.client.cache.observe(
+    doc<{ n: number }>('order', '/orders/x'),
+    { live: false },
+    () => undefined,
+  );
   await kit.clock.advance(0);
   answer = { status: 'unavailable', message: 'busy' };
   void kit.client.cache.invalidate(['order']);
@@ -271,7 +299,11 @@ test('auth gating: loading while restoring, empty while signed out, fetched once
 test('a disabled descriptor fetches nothing', async () => {
   const kit = await signedIn();
   const fetches = counter(kit, '/orders/x');
-  const o = kit.client.cache.observe(doc('order', '/orders/x', { enabled: false }), { live: true }, () => undefined);
+  const o = kit.client.cache.observe(
+    doc('order', '/orders/x', { enabled: false }),
+    { live: true },
+    () => undefined,
+  );
   await kit.clock.advance(60_000);
   assert.equal(fetches(), 0);
   assert.deepEqual(o.getResult(), { ...o.getResult(), data: null, loading: false, error: null });

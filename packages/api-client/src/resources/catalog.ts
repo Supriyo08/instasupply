@@ -15,7 +15,8 @@ export const catalogPaths = {
   store: (storeId: string) => `/stores/${seg(storeId)}`,
   storeSettings: (storeId: string) => `/stores/${seg(storeId)}/settings`,
   storeReviews: (storeId: string) => `/stores/${seg(storeId)}/reviews`,
-  storeReview: (storeId: string, storeOrderId: string) => `/stores/${seg(storeId)}/reviews/${seg(storeOrderId)}`,
+  storeReview: (storeId: string, storeOrderId: string) =>
+    `/stores/${seg(storeId)}/reviews/${seg(storeOrderId)}`,
   products: '/products',
   product: (productId: string) => `/products/${seg(productId)}`,
   productStock: (productId: string) => `/products/${seg(productId)}/stock-adjust`,

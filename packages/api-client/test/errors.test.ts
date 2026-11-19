@@ -112,7 +112,9 @@ test('transport errors: TypeError is unavailable, AbortError cancelled; through 
 
   const controller = new AbortController();
   server.failNext(1, 'timeout');
-  const cancelled = client.post('/thing', {}, { auth: 'none', signal: controller.signal }).catch((e: unknown) => e);
+  const cancelled = client
+    .post('/thing', {}, { auth: 'none', signal: controller.signal })
+    .catch((e: unknown) => e);
   controller.abort();
   assert.equal(((await cancelled) as ApiError).status, 'cancelled');
 });
@@ -139,12 +141,18 @@ test('the envelope travels through the client with its code and request id', asy
 test('describeError table', () => {
   const make = (status: ApiError['status'], extra: Partial<ConstructorParameters<typeof ApiError>[0]> = {}) =>
     new ApiError({ status, message: 'Server says hi.', httpStatus: 400, ...extra });
-  assert.equal(describeError(make('unavailable', { httpStatus: null })), "Can't reach the server. Check your connection and try again.");
+  assert.equal(
+    describeError(make('unavailable', { httpStatus: null })),
+    "Can't reach the server. Check your connection and try again.",
+  );
   assert.equal(
     describeError(make('deadline-exceeded', { httpStatus: null })),
     'This is taking longer than usual. Check your connection and try again.',
   );
-  assert.equal(describeError(make('cancelled', { httpStatus: null })), 'The request was interrupted. Please try again.');
+  assert.equal(
+    describeError(make('cancelled', { httpStatus: null })),
+    'The request was interrupted. Please try again.',
+  );
   assert.equal(
     describeError(make('unauthenticated', { details: { reason: 'credentials' } })),
     'That email and password combination is incorrect.',
@@ -163,7 +171,10 @@ test('describeError table', () => {
     describeError(make('resource-exhausted', { message: '' })),
     'Too many requests right now. Please wait a moment and try again.',
   );
-  assert.equal(describeError(make('not-found', { message: '' })), "That isn't available right now. Please try again later.");
+  assert.equal(
+    describeError(make('not-found', { message: '' })),
+    "That isn't available right now. Please try again later.",
+  );
   assert.equal(describeError(make('failed-precondition')), 'Server says hi.');
   assert.equal(describeError(make('internal')), 'Something went wrong. Please try again.');
   assert.equal(describeError(make('internal'), 'Could not save.'), 'Could not save.');

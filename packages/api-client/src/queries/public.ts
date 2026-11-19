@@ -35,18 +35,30 @@ function storeOfProduct(productId: string): string | null {
 
 export const publicQueries = {
   categories: () =>
-    listQuery<Category>(['categories'], true, catalogPaths.categories, {}, {
-      auth: 'none',
-      topics: [topics.categories()],
-      pollS: 300,
-    }),
+    listQuery<Category>(
+      ['categories'],
+      true,
+      catalogPaths.categories,
+      {},
+      {
+        auth: 'none',
+        topics: [topics.categories()],
+        pollS: 300,
+      },
+    ),
 
   stores: () =>
-    listQuery<WithId<Store>>(['stores'], true, catalogPaths.stores, { marketId: MARKET_ID }, {
-      auth: 'none',
-      topics: [topics.stores()],
-      pollS: 60,
-    }),
+    listQuery<WithId<Store>>(
+      ['stores'],
+      true,
+      catalogPaths.stores,
+      { marketId: MARKET_ID },
+      {
+        auth: 'none',
+        topics: [topics.stores()],
+        pollS: 60,
+      },
+    ),
 
   store: (storeId: string | null | undefined) => {
     const id = idOrNull(storeId);

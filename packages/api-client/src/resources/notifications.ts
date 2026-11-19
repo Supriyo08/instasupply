@@ -10,7 +10,8 @@ export const notificationPaths = {
 
 export function createNotifications(ctx: ResourceContext) {
   return {
-    markRead: (id: string) => writeThen(ctx, [['notifications']], () => ctx.rest.post(notificationPaths.read(id))),
+    markRead: (id: string) =>
+      writeThen(ctx, [['notifications']], () => ctx.rest.post(notificationPaths.read(id))),
     markAllRead: () => writeThen(ctx, [['notifications']], () => ctx.rest.post(notificationPaths.readAll)),
     remove: (id: string) =>
       writeThen(ctx, [['notifications']], () => ctx.rest.delete(notificationPaths.notification(id))),

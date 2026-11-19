@@ -18,7 +18,10 @@ export interface RequestOptions {
 export interface Rest {
   get<T>(path: string, options?: RequestOptions): Promise<T>;
   /** GET that returns `{ items, nextCursor }`. `limit` and `cursor` go into the query string. */
-  list<T>(path: string, options?: RequestOptions & { limit?: number; cursor?: string | null }): Promise<Page<T>>;
+  list<T>(
+    path: string,
+    options?: RequestOptions & { limit?: number; cursor?: string | null },
+  ): Promise<Page<T>>;
   post<T = void>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   put<T = void>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   patch<T = void>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
@@ -42,7 +45,10 @@ export function createRest(http: HttpPipeline): Rest {
         throw e;
       }
     },
-    list<T>(path: string, options?: RequestOptions & { limit?: number; cursor?: string | null }): Promise<Page<T>> {
+    list<T>(
+      path: string,
+      options?: RequestOptions & { limit?: number; cursor?: string | null },
+    ): Promise<Page<T>> {
       const query = { ...options?.query, limit: options?.limit, cursor: options?.cursor ?? undefined };
       return http.request<Page<T>>({ method: 'GET', path, ...common(options), query });
     },

@@ -110,8 +110,10 @@ packages/api-client/
     http.ts                  request pipeline: URL, headers, token, timeout, envelope, 401 retry
     errors.ts                ApiError, errorCodeOf, describeError, …
     platform.ts              SecretStorage, KeyValueStorage, Lifecycle, RefreshLock, Clock (interfaces)
-    ids.ts                   newRequestId
+    ids.ts                   newRequestId, canonicalJson (query keys from filter objects)
     config.ts                PublicConfig, ConfigStore
+    contract.ts              the REST types of PLATFORM.md §5.4, re-exported from `@instasupply/shared`
+                             (`rest.ts`); declares only what shared does not have yet (`OutboxMessage`)
     auth/
       tokens.ts              TokenManager: access token in memory, single-flight refresh, rotation
       session.ts             SessionCore: status, user, profile, sign-in, sign-out, offline start
@@ -122,6 +124,8 @@ packages/api-client/
                              one file per aggregate (reads feed the descriptors, writes are §4.2)
       me.ts  catalog.ts  orders.ts  deliveries.ts  jobs.ts  chat.ts  support.ts  quotes.ts
       issues.ts  finance.ts  notifications.ts  users.ts  ops.ts  files.ts  location.ts
+      context.ts             ResourceContext, `writeThen` (write, then invalidate the row's families)
+      index.ts               createResources: the `api.<resource>` namespaces of §4.2
     topics.ts                *** single place for live topic strings *** (§4.1)
     live/
       protocol.ts            wire messages of /api/v1/live
@@ -130,9 +134,14 @@ packages/api-client/
     query/
       types.ts               QueryKey, QueryDescriptor, PagedQueryDescriptor, QueryResult
       query-cache.ts         QueryCache: entries, de-duplication, invalidation, optimistic layer, polling
+      observer.ts            QueryObserver: one hook's view across key changes (keepPreviousData)
+      paged.ts               first-page merge, load more (usePagedQuery's engine)
+      mutation.ts            MutationRunner: optimistic patches, rollback, double-call guard
     queries/                 *** single place for query keys ***: descriptors per aggregate (§4.1);
                              each `fetch` calls a read function of resources/, each `topics` uses topics.ts
       index.ts               export const queries = { … }
+      helpers.ts             docQuery, listQuery, pagedQuery, valueQuery, payload reducers
+      public.ts  customer.ts  supplier.ts  driver.ts  ops.ts   the tables of §4.1
     uploads.ts               uploadFile: presign, upload, confirm
     driver/
       location-publisher.ts  LocationPublisher, TRACKING_PROFILES (§5)
@@ -154,6 +163,7 @@ packages/api-client/
       index.ts               fake server, fake socket, fake clock, memory storage (§1.13)
   test/
     *.test.ts  *.test.tsx    node:test through tsx
+    support.ts               shared fixtures (a signed-in customer), not a test file itself
 ```
 
 ### 1.2 Package manifest
@@ -202,10 +212,19 @@ packages/api-client/
     "@types/node": "^22.15.0",
     "@types/react": "~19.3.0",
     "@types/react-dom": "~19.3.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo-crypto": "~58.0.8",
+    "expo-network": "~58.0.5",
+    "expo-secure-store": "~58.0.3",
+    "react": "19.3.0",
     "react-dom": "19.3.0"
   }
 }
 ```
+
+The four native modules are also dev dependencies so that `tsc` can type-check
+`src/native/platform.native.ts` (it is in `include`, though only Metro resolves it); the apps still
+list them as their own dependencies for autolinking.
 
 The package is consumed as TypeScript source, like `@instasupply/shared` (Metro and Vite compile
 workspace packages; subpath `exports` are resolved by both, V14). The native modules are peer
@@ -228,12 +247,12 @@ The server answers every failure with one envelope (decision P4):
 ```
 
 ```ts
-import type { ErrorCode, DeliveryWindow, PricedCheckout } from '@instasupply/shared';
+import type { ErrorCode, ErrorDetailsByCode as SharedErrorDetailsByCode } from '@instasupply/shared';
 
-/** Statuses the server sends (MARKETPLACE §5.9, decision P4). */
+/** Statuses the server sends (MARKETPLACE §5.9, decision P4); PLATFORM.md §4.2 adds `unavailable` (503). */
 export type ServerErrorStatus =
   | 'invalid-argument' | 'failed-precondition' | 'permission-denied' | 'unauthenticated'
-  | 'not-found' | 'already-exists' | 'resource-exhausted' | 'internal';
+  | 'not-found' | 'already-exists' | 'resource-exhausted' | 'internal' | 'unavailable';
 
 /** Statuses the client produces itself when no usable answer arrived. */
 export type TransportErrorStatus = 'unavailable' | 'deadline-exceeded' | 'cancelled';
@@ -259,6 +278,8 @@ export interface ApiErrorInit {
   method?: string;
   path?: string;
   cause?: unknown;
+  /** False when `message` is technical (a non-envelope answer) and must not be shown. Default: `httpStatus` is set. */
+  fromServer?: boolean;
 }
 
 export class ApiError extends Error {
@@ -276,6 +297,8 @@ export class ApiError extends Error {
   readonly method: string;
   /** Path below /api/v1, without the query string. */
   readonly path: string;
+  /** `message` was written by the server for the user; `describeError` shows only those. */
+  readonly fromServer: boolean;
 
   constructor(init: ApiErrorInit);
 
@@ -296,22 +319,14 @@ export function errorStatusOf(error: unknown): ApiErrorStatus | null;
 /** True for `unavailable` and `deadline-exceeded`. Keeps a typed OTP on screen, shows "You're offline". */
 export function isNetworkError(error: unknown): boolean;
 
-/** The `details` each code carries (MARKETPLACE §5.9, column "Details"). */
-export interface ErrorDetailsByCode {
-  PRICE_CHANGED: { pricing: PricedCheckout };
-  WINDOW_UNAVAILABLE: { windows: DeliveryWindow[] };
-  OUT_OF_STOCK: { productId: string; available: number };
-  STORE_UNAVAILABLE: { storeId: string };
-  STORE_PAUSED: { storeId: string };
-  OUT_OF_RANGE: { storeId: string };
-  TOO_LARGE: { storeId: string };
-  JOBSITE_VEHICLE_LIMIT: { storeId: string };
-  DELIVERY_UNAVAILABLE: { storeId: string };
-  PICKUP_UNAVAILABLE: { storeId: string };
-  CARD_DECLINED: { reason: 'card_declined' | 'insufficient_funds' | 'expired_card' | 'processing_error' };
-  VERSION_CONFLICT: { version: number };
-  CODE_INCORRECT: { remaining: number };
-}
+/**
+ * The `details` each code carries (MARKETPLACE §5.9, column "Details"): the one definition in
+ * `@instasupply/shared` `errors.ts`, which the server builds them from. It holds `PRICE_CHANGED`
+ * (`pricing`), `WINDOW_UNAVAILABLE` (`windows: WindowOption[]`, plain numbers that can travel in an
+ * error), `OUT_OF_STOCK`, `CARD_DECLINED`, `VERSION_CONFLICT`, `CODE_INCORRECT` and every per-store
+ * pricing blocker (`{ storeId }`).
+ */
+export type ErrorDetailsByCode = SharedErrorDetailsByCode;
 /** Typed details when `error` carries `code`, else null: `detailsFor(e, 'OUT_OF_STOCK')?.available`. */
 export function detailsFor<C extends keyof ErrorDetailsByCode>(error: unknown, code: C): ErrorDetailsByCode[C] | null;
 
@@ -433,6 +448,8 @@ export interface ApiClient extends Rest, Resources {
   readonly config: ConfigStore;           // §8.1
   readonly live: LiveClient;              // §1.9
   readonly cache: QueryCache;             // §1.10 (named `cache`, because "store" is a supplier in this domain)
+  /** The injected clock; the location publisher (§5) throttles with it, so tests drive it with the fake clock. */
+  readonly clock: Clock;
   /** Typed command: POST /call/<name>. §1.6 */
   call: Call;
   /** Presigned upload, then confirm. §1.8 */
@@ -746,8 +763,10 @@ make a missing or extra name a build error:
 | `resolveIssue` | `ResolveIssueRequest` | `ResolveIssueResponse` | staff |
 | `runJobNow` | `RunJobNowRequest` | `RunJobNowResponse` = `{ job: ScheduledJobName; now: number; result: Record<string, number> }` | admin, only when `config.allowTestJobs` |
 
-`ClaimJobResponse` and `RunJobNowResponse` are unnamed in MARKETPLACE §5.3; until `api.ts` exports
-them the package declares them locally in `callables.ts` with exactly these shapes.
+`ClaimJobResponse` and `RunJobNowResponse` are unnamed in MARKETPLACE §5.3; `api.ts` of
+`@instasupply/shared` exports them with exactly these shapes (PLATFORM.md §5.2), and `CallableMap` is
+derived from its `CallableContracts`. `sendTestNotification` has a `void` request there and is sent
+as `{}`.
 
 **Default invalidation.** After a command succeeds, `call` marks the query families it changes as
 stale (`CALL_INVALIDATIONS`, prefix match on the first key elements, §1.12), so a screen sees its own
@@ -807,10 +826,11 @@ export interface Rest {
 Query-string rules, the same for every list endpoint: `undefined` and `null` are left out; arrays
 are joined with commas (`status=new,accepted`); booleans are `true` and `false`; timestamps are
 epoch milliseconds (`createdSince=1795123200000`); sorting is `sort=<field>:asc` or `:desc`;
-`limit` defaults to 50 on the server and is at most 500. A caller who is not staff must send the
-filter that scopes the list to themselves (`customerId=<own uid>`, `driverId=<own uid>`,
-`storeId=<own store>`), which mirrors the Firestore queries the rules allowed; the server answers
-`permission-denied` otherwise (B11). Path segments are passed through `encodeURIComponent` by the
+`limit` defaults to 50 on the server and is at most 500. A caller who is not staff only ever gets
+their own rows (PLATFORM.md §5.3, scoping rule): the scoping filter (`customerId=<own uid>`,
+`driverId=<own uid>`, `storeId=<own store>`) may be sent and must then be the caller's own, else
+`permission-denied`; when it is left out the server applies it. The descriptors send it anyway, so a
+key names whose rows it holds (B11). Path segments are passed through `encodeURIComponent` by the
 resource functions.
 
 Writes that the client may repeat are idempotent by construction: creations are `PUT` to an id the
@@ -852,9 +872,11 @@ export interface UploadedFile {
   sizeBytes: number;
 }
 
-/** Local checks before any request, so the user gets the limit as a form error. Re-exported from
- *  `@instasupply/shared` (PLATFORM.md §16), where the server reads the same constant. */
-export { UPLOAD_LIMITS } from '@instasupply/shared';
+/** Local checks before any request, so the user gets the limit as a form error. PLATFORM.md §16 row 9
+ *  moves the constant to `@instasupply/shared`, where the server reads it too; until shared exports it
+ *  the package declares it in `uploads.ts` with the numbers of PLATFORM.md §10.1 (MB = 1 048 576 bytes). */
+export const UPLOAD_LIMITS: Record<UploadPurpose, { maxBytes: number; contentTypes: readonly string[];
+  perScope: { max: number; perDay: boolean } }>;
 export function validateUpload(purpose: UploadPurpose, source: UploadSource): string | null;
 ```
 
@@ -918,7 +940,7 @@ is `http://`. Tokens are never put in the URL.
 
 Close codes the client understands: `4401` (token expired or invalid: refresh, then reconnect at
 once), `4403` (session revoked or account suspended: call `session.refreshProfile()`, which ends the
-session through the normal path), `1012` and `1013` (server restarting, or events may have been missed:
+session through the normal path), `1012` (and `1013`, which the server does not send today) (server restarting, or events may have been missed:
 reconnect with backoff; `onResync` refetches), `1008` (a socket limit: too many sockets per address or
 user, or too many frames; state `waiting` with a fixed delay of 5 minutes, during which queries poll as
 when the socket is down, and `attempt` is not increased). Every other close is treated as a network drop.
@@ -948,6 +970,8 @@ export interface LiveClient {
   subscribe(topic: string, listener: (event: LiveEvent) => void): () => void;
   /** The server refused the topic. Queries bound to it fall back to polling. */
   isDenied(topic: string): boolean;
+  /** Fires when the set of denied topics changes, so the cache can start or stop polling at once. */
+  onDenied(listener: () => void): () => void;
   /** Fires after each successful (re)connection once every topic has been sent again: events may have been missed. */
   onResync(listener: () => void): () => void;
   start(): void;
@@ -972,7 +996,7 @@ Behaviour:
 | lifecycle `background` (native only) | after 20 s still in the background: close, state `paused`. System push covers alerts from here (§6). The driver's location task does not use the socket |
 | lifecycle `foreground` (native) | reconnect at once. `onResync` makes every live query refetch |
 | web tab hidden | nothing changes. The portal's new-order chime and the console's desktop notifications need the socket in hidden tabs |
-| `subscribed.denied` | remember the topic as denied, log through `onDebug`; the queries bound to it poll (§1.10) |
+| `subscribed.denied` | remember the topic as denied, log through `onDebug`; the queries bound to it poll (§1.10). After a re-`auth` the server sends `subscribed` with `id: 0` and the topics it dropped in `denied` (PLATFORM.md §8.1): handled the same way |
 
 Railway keeps WebSockets open without a time limit, even idle (V16). The heartbeat exists for
 phones: carrier NATs drop silent connections, and a half-open socket would otherwise look healthy.
@@ -1015,6 +1039,8 @@ export interface QueryDescriptor<T> {
   gcMs?: number;
   /** While a hook switches to another key, keep returning its previous data with `loading: true`. Default true for lists, false for single documents. */
   keepPreviousData?: boolean;
+  /** Server time (epoch ms) at which the data expires; while observed the entry refetches one minute before. `fileUrl`, `storeOrderProof`. */
+  expiresAt?(data: T): number | null;
 }
 
 export interface PagedQueryDescriptor<T>
@@ -1047,9 +1073,9 @@ export interface QueryCache {
   getData<T>(key: QueryKey): T | undefined;
   /** Writes server-confirmed data, for example the document a write returned. */
   setData<T>(key: QueryKey, update: T | ((current: T | undefined) => T | undefined)): void;
-  /** Marks every entry whose key starts with `prefix` stale; those with observers refetch. */
-  invalidate(prefix: QueryKey): void;
-  invalidateAll(): void;
+  /** Marks every entry whose key starts with `prefix` stale; those with observers refetch. Settles when those refetches settled (§1.12 step 3 waits for it). */
+  invalidate(prefix: QueryKey): Promise<void>;
+  invalidateAll(): Promise<void>;
   /** Optimistic layer over the server data (§1.12). Returns the rollback. */
   patch<T>(key: QueryKey, apply: (current: T) => T): () => void;
   prefetch<T>(query: QueryDescriptor<T>): Promise<T>;
@@ -1236,14 +1262,18 @@ export function createFakeClock(startAt?: number): FakeClock;
 export function createMemoryStorage(initial?: Record<string, string>): SecretStorage & { dump(): Record<string, string> };
 export function createFakeLifecycle(): Lifecycle & { emit(event: LifecycleEvent): void };
 
-export interface FakeRequest { method: string; path: string; query: URLSearchParams; headers: Headers; body: unknown }
-export type FakeAnswer = { status?: number; body?: unknown } | ApiErrorInit;
+export interface FakeRequest {
+  method: string; path: string; query: URLSearchParams; headers: Headers; body: unknown;
+  /** The caller the bearer identified, or null (the fake answers a bad bearer itself, as §6.4 does). */
+  uid: string | null;
+}
+export type FakeAnswer = { status?: number; body?: unknown; headers?: Record<string, string> } | ApiErrorInit;
 
 export interface FakeServer {
   /** Pass both to createApiClient. */
   fetch: typeof fetch;
   WebSocket: WebSocketFactory;
-  /** Route handler; `path` may contain `:params`. Later registrations win. */
+  /** Route handler; `path` may contain `:params`. Later registrations win. A path starting with `http` matches a full URL (a storage form). */
   on(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string,
      handler: (request: FakeRequest, params: Record<string, string>) => FakeAnswer | Promise<FakeAnswer>): void;
   /** Implements /auth/* and /me for one account with rotation and reuse detection. */
@@ -1259,13 +1289,23 @@ export interface FakeServer {
   closeSockets(code?: number): void;
   refuseSockets(refuse: boolean): void;
   denyTopic(topic: string): void;
+  /** While true, sockets accept frames and answer nothing: a half-open connection (heartbeat test). */
+  stallSockets(stall: boolean): void;
   readonly requests: FakeRequest[];
+  /** Every frame a client sent, with the number of its socket. */
+  readonly frames: { socket: number; frame: ClientFrame }[];
   subscribedTopics(): string[];
+  openSockets(): number;
+  /** Sockets ever constructed (a reconnect makes a new one). */
+  socketCount(): number;
+  /** Access-token lifetime the fake issues, seconds (900). */
+  accessTokenTtlSeconds: number;
 }
 export function createFakeServer(options?: { clock?: FakeClock }): FakeServer;
 
 /** A client wired to a fake server, a fake clock, memory storages and a fake lifecycle. */
-export function createTestClient(overrides?: Partial<ApiClientOptions>): {
+/** `server` and `clock` may be passed to run two clients (two tabs, an app restart) against one server. */
+export function createTestClient(overrides?: Partial<ApiClientOptions> & { server?: FakeServer; clock?: FakeClock }): {
   client: ApiClient; server: FakeServer; clock: FakeClock;
   lifecycle: ReturnType<typeof createFakeLifecycle>;
   secrets: ReturnType<typeof createMemoryStorage>; cache: ReturnType<typeof createMemoryStorage>;
@@ -1895,8 +1935,8 @@ Ops console (staff):
 | `queries.outbox()` (paged) | `['outbox']` | `GET /dev-outbox?limit=100` | `ops:outbox` | 15 | `OutboxMessage` (PLATFORM.md §5.4: SMS and email; `body` is null for a redacted row) |
 | `queries.activity(limit)` | `['activity', limit]` | `GET /activity?limit=` | `ops:deliveries` | 30 | `DeliveryEvent[]`, newest first |
 
-Two server-computed shapes the console needs and no shared type names yet (assumption B16; the
-package declares them in `resources/ops.ts` until `packages/shared` does):
+Two server-computed shapes the console needs (assumption B16), exported by `@instasupply/shared`
+`rest.ts` (PLATFORM.md §5.4) and re-exported by the package:
 
 ```ts
 export interface OpsDashboard {
@@ -3132,7 +3172,7 @@ behaviour. Where PLATFORM.md says otherwise it wins.
 | B8 | Suspending an account revokes its sessions; every request, refresh, `GET /me` and a login with the right password then answer `permission-denied` with reason `account_suspended`, which the server checks before `session_revoked` (PLATFORM.md §6.4) | §2.4 |
 | B9 | A push device belongs to a device session (`installationId`). `POST /auth/logout { refreshToken }` works without an access token and deletes the session and its device. Revocation does the same. `PUT /me/devices/{installationId}` upserts and removes the same token from every other account | §2.5, §6.3 |
 | B10 | Documents have the shapes of MARKETPLACE §1.3 with every `…At` as epoch ms and always an `id` string (the old document id: `uid`, `deliveryId`, `storeOrderId`, `payoutId`, …), also where the shared type declares none. Private parts are separate endpoints (`/stores/{id}/settings`, `/store-orders/{id}/private`, `/deliveries/{id}/private`, `/quotes/{id}/workspace`, `/issues/{id}/notes`). A supplier never receives `trackingToken` or the customer's `pickupCode` | `WithId`, §4.1 |
-| B11 | Lists answer `{ items, nextCursor }`; filters, `sort`, `limit` and `cursor` work as §1.7 describes; resource names are the Firestore collection names in kebab-case (`store-orders`, `job-offers`, `driver-locations`, `support-threads`, `ledger-entries`, `store-suggestions`, `dev-outbox`), the caller's own data is under `/me/…`; a non-staff caller must send the scoping filter | `src/resources/*`, `src/queries/*` |
+| B11 | Lists answer `{ items, nextCursor }`; filters, `sort`, `limit` and `cursor` work as §1.7 describes; resource names are the Firestore collection names in kebab-case (`store-orders`, `job-offers`, `driver-locations`, `support-threads`, `ledger-entries`, `store-suggestions`, `dev-outbox`), the caller's own data is under `/me/…`; a non-staff caller only gets their own rows: a scoping filter they send must be their own, one they leave out is applied by the server (PLATFORM.md §5.3) | `src/resources/*`, `src/queries/*` |
 | B12 | The live socket speaks the frames of §1.9: `auth` as the first message (never a token in the URL), `subscribe` / `unsubscribe` with acknowledgement and per-topic denial, `event`, `ping` / `pong`, the close codes 4401, 4403, 1012 and 1008 | `live/protocol.ts` |
 | B13 | Anonymous connections are allowed and may subscribe to the public topics | `live-client.ts` |
 | B14 | Topic names and who may subscribe are those of §4.1 | `src/topics.ts` only |

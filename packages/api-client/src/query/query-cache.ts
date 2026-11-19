@@ -528,7 +528,11 @@ export class QueryCacheImpl implements QueryCache {
   private onLifecycle(event: LifecycleEvent): void {
     this.forEachObserved((entry) => {
       this.updateTimers(entry);
-      if ((event === 'foreground' || event === 'online') && this.isStale(entry) && this.gate(entry) === 'ok') {
+      if (
+        (event === 'foreground' || event === 'online') &&
+        this.isStale(entry) &&
+        this.gate(entry) === 'ok'
+      ) {
         this.runFetch(entry);
       }
     });
@@ -578,7 +582,14 @@ export class QueryCacheImpl implements QueryCache {
     if (gate === 'disabled' || gate === 'blocked') {
       result = { ...disabledResult(empty), retry: entry.retry };
     } else if (gate === 'wait') {
-      result = { data: empty, loading: true, error: null, retry: entry.retry, refreshing: false, updatedAt: null };
+      result = {
+        data: empty,
+        loading: true,
+        error: null,
+        retry: entry.retry,
+        refreshing: false,
+        updatedAt: null,
+      };
     } else if (entry.hasData) {
       result = {
         data: this.visible(entry),
@@ -589,7 +600,14 @@ export class QueryCacheImpl implements QueryCache {
         updatedAt: entry.updatedAt,
       };
     } else if (entry.fetching || entry.trailing || !entry.error) {
-      result = { data: empty, loading: true, error: null, retry: entry.retry, refreshing: false, updatedAt: null };
+      result = {
+        data: empty,
+        loading: true,
+        error: null,
+        retry: entry.retry,
+        refreshing: false,
+        updatedAt: null,
+      };
     } else {
       result = {
         data: empty,

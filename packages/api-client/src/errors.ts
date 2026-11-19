@@ -1,4 +1,9 @@
-import { isErrorCode, type ErrorCode, type ErrorDetailsByCode as SharedErrorDetailsByCode } from '@instasupply/shared';
+import {
+  isErrorCode,
+  type AuthFailureReason,
+  type ErrorCode,
+  type ErrorDetailsByCode as SharedErrorDetailsByCode,
+} from '@instasupply/shared';
 
 /** Statuses the server sends (MARKETPLACE §5.9, PLATFORM §4.2). `unavailable` also comes from the server (503). */
 export type ServerErrorStatus =
@@ -18,13 +23,7 @@ export type TransportErrorStatus = 'unavailable' | 'deadline-exceeded' | 'cancel
 export type ApiErrorStatus = ServerErrorStatus | TransportErrorStatus;
 
 /** Why an `unauthenticated` or `permission-denied` answer ended, or did not end, the session (PLATFORM §6.4). */
-export type AuthFailureReason =
-  | 'token_expired'
-  | 'token_invalid'
-  | 'session_revoked'
-  | 'refresh_reused'
-  | 'account_suspended'
-  | 'credentials';
+export type { AuthFailureReason };
 
 const AUTH_REASONS: readonly AuthFailureReason[] = [
   'token_expired',
@@ -132,7 +131,8 @@ export function toApiError(value: unknown): ApiError {
     // fetch rejects with a TypeError when no response arrived (DNS, refused, offline, CORS).
     return new ApiError({ status: 'unavailable', message: value.message || 'Network error', cause: value });
   }
-  const message = value instanceof Error ? value.message : typeof value === 'string' ? value : 'Unknown error';
+  const message =
+    value instanceof Error ? value.message : typeof value === 'string' ? value : 'Unknown error';
   return new ApiError({ status: 'internal', message, cause: value });
 }
 
@@ -186,7 +186,8 @@ export function describeError(error: unknown, fallback: string = DEFAULT_FALLBAC
         ? 'That email and password combination is incorrect.'
         : 'Your session has ended. Please sign in again.';
     case 'permission-denied':
-      if (e.authReason === 'account_suspended') return 'Your account is suspended. Contact InstaSupply support.';
+      if (e.authReason === 'account_suspended')
+        return 'Your account is suspended. Contact InstaSupply support.';
       return serverMessage || "You don't have access to this.";
     case 'resource-exhausted':
       return serverMessage || 'Too many requests right now. Please wait a moment and try again.';

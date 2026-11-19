@@ -42,7 +42,12 @@ test('a public command works signed out and sends no bearer', async () => {
   const kit = await signedIn();
   await kit.client.session.signOut();
   kit.server.on('POST', '/call/suggestStore', () => ({ body: { ok: true } }));
-  await kit.client.call('suggestStore', { storeName: 'Kestrel', city: 'Toronto', interests: [], email: null });
+  await kit.client.call('suggestStore', {
+    storeName: 'Kestrel',
+    city: 'Toronto',
+    interests: [],
+    email: null,
+  });
   const [sent] = requestsTo(kit, 'POST', '/call/suggestStore');
   assert.equal(sent?.headers.get('authorization'), null);
 });

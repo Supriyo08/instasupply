@@ -54,7 +54,10 @@ test('list sends limit and cursor, readAll follows nextCursor', async () => {
   assert.equal(page.nextCursor, 'c2');
   assert.equal(server.requests.at(-1)?.query.get('limit'), '2');
   const all = await readAll<{ id: string }>(client, '/categories', { auth: 'none' });
-  assert.deepEqual(all.map((item) => item.id), ['a', 'b', 'c']);
+  assert.deepEqual(
+    all.map((item) => item.id),
+    ['a', 'b', 'c'],
+  );
   assert.equal(server.requests.at(-1)?.query.get('cursor'), 'c2');
   assert.equal(server.requests.at(-1)?.query.get('limit'), '500');
 });
@@ -63,7 +66,10 @@ test('notFoundAsNull turns a 404 into null; without it the 404 throws', async ()
   const { client, server } = createTestClient();
   server.on('GET', '/threads/:id', () => ({ status: 'not-found', message: 'No thread yet.' }));
   assert.equal(await client.get('/threads/u1', { auth: 'none', notFoundAsNull: true }), null);
-  await assert.rejects(client.get('/threads/u1', { auth: 'none' }), (e: unknown) => (e as ApiError).status === 'not-found');
+  await assert.rejects(
+    client.get('/threads/u1', { auth: 'none' }),
+    (e: unknown) => (e as ApiError).status === 'not-found',
+  );
 });
 
 test('GET is repeated twice after 503, after 300 and 900 ms', async () => {
@@ -121,5 +127,8 @@ test('a 204 resolves with undefined, a 200 with the document itself', async () =
   server.on('DELETE', '/me/cards/:id', () => ({ status: 204 }));
   server.on('GET', '/stores/:id', (_request, params) => ({ body: { id: params.id, name: 'Kestrel' } }));
   assert.equal(await client.delete('/me/cards/c1', { auth: 'none' }), undefined);
-  assert.deepEqual(await client.get('/stores/kestrel-lumber', { auth: 'none' }), { id: 'kestrel-lumber', name: 'Kestrel' });
+  assert.deepEqual(await client.get('/stores/kestrel-lumber', { auth: 'none' }), {
+    id: 'kestrel-lumber',
+    name: 'Kestrel',
+  });
 });

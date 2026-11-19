@@ -1,6 +1,12 @@
 import type { AuthSessionResponse } from '../contract';
 import { ApiError, toApiError } from '../errors';
-import { STORAGE_KEYS, type Clock, type RefreshLock, type SecretStorage, type StoredSession } from '../platform';
+import {
+  STORAGE_KEYS,
+  type Clock,
+  type RefreshLock,
+  type SecretStorage,
+  type StoredSession,
+} from '../platform';
 
 /** A request refreshes first when the access token has less than this left (CLIENTS §1.5 rule 4). */
 export const REFRESH_MARGIN_MS = 60_000;
@@ -104,7 +110,8 @@ export class TokenManager {
   /** A valid access token, refreshing first when it has under 60 s left; null when signed out. */
   async accessToken(): Promise<string | null> {
     if (!this.stored) return null;
-    if (this.access && this.access.deadline - this.deps.clock.now() > REFRESH_MARGIN_MS) return this.access.token;
+    if (this.access && this.access.deadline - this.deps.clock.now() > REFRESH_MARGIN_MS)
+      return this.access.token;
     return this.refresh();
   }
 
@@ -211,7 +218,8 @@ export class TokenManager {
       this.debug({ type: 'auth.refresh.error', status: e.status, reason: e.authReason });
       if (generation !== this.generation) throw e;
       if (e.status === 'resource-exhausted') {
-        const wait = typeof e.details.retryAfterMs === 'number' ? e.details.retryAfterMs : RATE_LIMIT_PAUSE_MS;
+        const wait =
+          typeof e.details.retryAfterMs === 'number' ? e.details.retryAfterMs : RATE_LIMIT_PAUSE_MS;
         this.pausedUntil = clock.now() + wait;
         this.pauseError = e;
       } else if (endsSession(e)) {

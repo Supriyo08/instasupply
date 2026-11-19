@@ -37,7 +37,11 @@ export function mergeFirstPage<T>(
 }
 
 /** Appends a further page, de-duplicated by id (an item that moved up is kept where it already is). */
-export function appendPage<T>(current: PagedState<T>, page: Page<T>, idOf: (item: T) => string): PagedState<T> {
+export function appendPage<T>(
+  current: PagedState<T>,
+  page: Page<T>,
+  idOf: (item: T) => string,
+): PagedState<T> {
   const seen = new Set(current.items.map(idOf));
   return {
     items: [...current.items, ...page.items.filter((item) => !seen.has(idOf(item)))],

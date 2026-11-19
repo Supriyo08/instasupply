@@ -52,21 +52,37 @@ export const customerQueries = {
 
   buyAgain: (uid: string | null | undefined) => {
     const id = idOrNull(uid);
-    return listQuery<Product>(['buy-again', id], id !== null, mePaths.buyAgain, {}, { follow: false, limit: 12 });
+    return listQuery<Product>(
+      ['buy-again', id],
+      id !== null,
+      mePaths.buyAgain,
+      {},
+      { follow: false, limit: 12 },
+    );
   },
 
   notifications: (uid: string | null | undefined) => {
     const id = idOrNull(uid);
-    return listQuery<AppNotification>(['notifications', id], id !== null, notificationPaths.notifications, {}, {
-      limit: 50,
-      follow: false,
-      topics: id ? [topics.userNotifications(id)] : [],
-      pollS: 30,
-      reduce: prependCreated,
-    });
+    return listQuery<AppNotification>(
+      ['notifications', id],
+      id !== null,
+      notificationPaths.notifications,
+      {},
+      {
+        limit: 50,
+        follow: false,
+        topics: id ? [topics.userNotifications(id)] : [],
+        pollS: 30,
+        reduce: prependCreated,
+      },
+    );
   },
 
-  customerOrders: (uid: string | null | undefined, state: OrderState, filters: { jobsiteId?: string | null } = {}) => {
+  customerOrders: (
+    uid: string | null | undefined,
+    state: OrderState,
+    filters: { jobsiteId?: string | null } = {},
+  ) => {
     const id = idOrNull(uid);
     return pagedQuery<Order>(
       ['orders', 'customer', id, state, filters.jobsiteId ?? null],
@@ -87,10 +103,16 @@ export const customerQueries = {
 
   orderStoreOrders: (orderId: string | null | undefined) => {
     const id = idOrNull(orderId);
-    return listQuery<StoreOrder>(['store-orders', 'order', id], id !== null, orderPaths.storeOrders, { orderId: id }, {
-      topics: id ? [topics.order(id)] : [],
-      pollS: 15,
-    });
+    return listQuery<StoreOrder>(
+      ['store-orders', 'order', id],
+      id !== null,
+      orderPaths.storeOrders,
+      { orderId: id },
+      {
+        topics: id ? [topics.order(id)] : [],
+        pollS: 15,
+      },
+    );
   },
 
   storeOrder: (storeOrderId: string | null | undefined) => {
@@ -160,21 +182,32 @@ export const customerQueries = {
 
   supportThread: (threadId: string | null | undefined) => {
     const id = idOrNull(threadId);
-    return docQuery<WithId<SupportThread>>(['support-thread', id], id !== null, () => supportPaths.thread(id ?? ''), {
-      topics: id ? [topics.supportThread(id)] : [],
-      pollS: 15,
-    });
+    return docQuery<WithId<SupportThread>>(
+      ['support-thread', id],
+      id !== null,
+      () => supportPaths.thread(id ?? ''),
+      {
+        topics: id ? [topics.supportThread(id)] : [],
+        pollS: 15,
+      },
+    );
   },
 
   supportMessages: (threadId: string | null | undefined) => {
     const id = idOrNull(threadId);
-    return listQuery<SupportMessage>(['support-messages', id], id !== null, supportPaths.messages(id ?? ''), {}, {
-      limit: 100,
-      follow: false,
-      topics: id ? [topics.supportThread(id)] : [],
-      pollS: 10,
-      reduce: appendMessage,
-    });
+    return listQuery<SupportMessage>(
+      ['support-messages', id],
+      id !== null,
+      supportPaths.messages(id ?? ''),
+      {},
+      {
+        limit: 100,
+        follow: false,
+        topics: id ? [topics.supportThread(id)] : [],
+        pollS: 10,
+        reduce: appendMessage,
+      },
+    );
   },
 
   /** Used through `useFileUrl(path)`: the URL is refetched a minute before it expires. */

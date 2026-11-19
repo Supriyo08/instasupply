@@ -20,8 +20,12 @@ export class QueryObserver<T> {
   }
 
   /** Starts observing `query` (stops the previous key). Returns the stop function. */
-  observe(query: QueryDescriptor<T>, live: boolean, onChange: () => void): () => void {
-    const stamp = QueryObserver.stampOf(query as QueryDescriptor<unknown>);
+  observe(
+    query: QueryDescriptor<T>,
+    live: boolean,
+    onChange: () => void,
+    stamp: string = QueryObserver.stampOf(query as QueryDescriptor<unknown>),
+  ): () => void {
     this.current?.observation.unsubscribe();
     const observation = this.cache.observe(query, { live }, onChange);
     this.current = { stamp, observation };
@@ -34,7 +38,9 @@ export class QueryObserver<T> {
   getResult(query: QueryDescriptor<T>): QueryResult<T> {
     const stamp = QueryObserver.stampOf(query as QueryDescriptor<unknown>);
     const base =
-      this.current && this.current.stamp === stamp ? this.current.observation.getResult() : this.cache.peek(query);
+      this.current && this.current.stamp === stamp
+        ? this.current.observation.getResult()
+        : this.cache.peek(query);
     let result = base;
     if (!base.loading && base.error === null && query.enabled !== false) {
       this.lastSettled = { stamp, data: base.data };

@@ -1,4 +1,11 @@
-import type { KeyValueStorage, Lifecycle, LifecycleEvent, PlatformBindings, RefreshLock, SecretStorage } from '../platform';
+import type {
+  KeyValueStorage,
+  Lifecycle,
+  LifecycleEvent,
+  PlatformBindings,
+  RefreshLock,
+  SecretStorage,
+} from '../platform';
 
 /** The lock name every tab of the console shares (CLIENTS §1.4). */
 const REFRESH_LOCK = 'instasupply.session.refresh';
@@ -72,7 +79,8 @@ interface LockManagerLike {
 }
 
 function webRefreshLock(): RefreshLock | undefined {
-  const locks = typeof navigator === 'undefined' ? undefined : (navigator as { locks?: LockManagerLike }).locks;
+  const locks =
+    typeof navigator === 'undefined' ? undefined : (navigator as { locks?: LockManagerLike }).locks;
   if (!locks) return undefined;
   return { run: (task) => locks.request(REFRESH_LOCK, task) };
 }

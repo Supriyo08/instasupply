@@ -2,7 +2,7 @@ import { haversineMeters } from '@instasupply/shared';
 
 import type { ApiClient } from '../client';
 import type { Fix, LocationAck, LocationReport, TrackingMode } from '../contract';
-import { ApiError, toApiError } from '../errors';
+import { type ApiError, toApiError } from '../errors';
 
 export type { Fix, LocationAck, LocationReport, TrackingMode } from '../contract';
 
@@ -77,7 +77,11 @@ export class LocationPublisher {
 
   constructor(
     private readonly client: ApiClient,
-    private readonly options: { battery?: () => Promise<number | null>; maxQueue?: number; maxFixAgeMs?: number } = {},
+    private readonly options: {
+      battery?: () => Promise<number | null>;
+      maxQueue?: number;
+      maxFixAgeMs?: number;
+    } = {},
   ) {
     this.maxQueue = options.maxQueue ?? 20;
     this.maxFixAgeMs = options.maxFixAgeMs ?? 5 * 60_000;
@@ -94,7 +98,10 @@ export class LocationPublisher {
   }
 
   /** Foreground watcher and background task both call this. Never throws. */
-  async ingest(fixes: readonly Fix[], options: { mode: TrackingMode; force?: boolean }): Promise<PublishOutcome> {
+  async ingest(
+    fixes: readonly Fix[],
+    options: { mode: TrackingMode; force?: boolean },
+  ): Promise<PublishOutcome> {
     try {
       if (this.stopped) return 'stopped';
       const profile = TRACKING_PROFILES[options.mode];
@@ -192,7 +199,8 @@ export class LocationPublisher {
   /** At most `maxQueue` fixes; one older than `maxFixAgeMs` behind a newer one is of no use on a map. */
   private trimQueue(): void {
     const newest = this.queue[this.queue.length - 1];
-    if (newest) this.queue = this.queue.filter((fix) => fix === newest || newest.at - fix.at <= this.maxFixAgeMs);
+    if (newest)
+      this.queue = this.queue.filter((fix) => fix === newest || newest.at - fix.at <= this.maxFixAgeMs);
     if (this.queue.length > this.maxQueue) this.queue = this.queue.slice(-this.maxQueue);
   }
 
@@ -206,7 +214,12 @@ export class LocationPublisher {
     const batch = this.queue.slice();
     this.inflight = true;
     try {
-      const report: LocationReport = { online: this.online, mode, battery: await this.readBattery(), fixes: batch };
+      const report: LocationReport = {
+        online: this.online,
+        mode,
+        battery: await this.readBattery(),
+        fixes: batch,
+      };
       const ack = await this.client.location.publish(report, { timeoutMs: REQUEST_TIMEOUT_MS });
       this.queue = this.queue.filter((fix) => !batch.includes(fix));
       this.lastSentAt = this.client.clock.now();
@@ -236,7 +249,8 @@ export class LocationPublisher {
           this.stop('forbidden');
           return 'stopped';
         default: {
-          const delay = PUBLISH_BACKOFF_MS[Math.min(this.backoffIndex, PUBLISH_BACKOFF_MS.length - 1)] ?? 60_000;
+          const delay =
+            PUBLISH_BACKOFF_MS[Math.min(this.backoffIndex, PUBLISH_BACKOFF_MS.length - 1)] ?? 60_000;
           this.backoffIndex += 1;
           this.notBefore = this.client.clock.now() + delay;
           return null;

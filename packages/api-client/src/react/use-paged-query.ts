@@ -32,7 +32,9 @@ export function usePagedQuery<T>(
   const live = options?.live !== false;
   // Both hooks are always called (rules of hooks); the unused one is disabled.
   const liveResult = useLiveQuery<PagedState<T>>(descriptor, { enabled: live && options?.enabled !== false });
-  const plainResult = useApiQuery<PagedState<T>>(descriptor, { enabled: !live && options?.enabled !== false });
+  const plainResult = useApiQuery<PagedState<T>>(descriptor, {
+    enabled: !live && options?.enabled !== false,
+  });
   const result = live ? liveResult : plainResult;
   const [, setTick] = useState(0);
   const loader = useMemo(

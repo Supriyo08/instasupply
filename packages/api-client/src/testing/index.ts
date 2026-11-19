@@ -10,7 +10,14 @@ import type { AuthSessionResponse, MeResponse } from '../contract';
 import { statusForHttp, type ApiErrorInit, type ApiErrorStatus, type AuthFailureReason } from '../errors';
 import type { LiveEvent } from '../live/live-client';
 import type { ClientFrame } from '../live/protocol';
-import type { Clock, Lifecycle, LifecycleEvent, SecretStorage, WebSocketFactory, WebSocketLike } from '../platform';
+import type {
+  Clock,
+  Lifecycle,
+  LifecycleEvent,
+  SecretStorage,
+  WebSocketFactory,
+  WebSocketLike,
+} from '../platform';
 
 // ---------- clock ----------
 
@@ -48,7 +55,8 @@ export function createFakeClock(startAt = Date.UTC(2026, 10, 20, 15, 0, 0)): Fak
         let next: { id: number; at: number; seq: number; run: () => void } | null = null;
         for (const [id, timer] of timers) {
           if (timer.at > target) continue;
-          if (!next || timer.at < next.at || (timer.at === next.at && timer.seq < next.seq)) next = { id, ...timer };
+          if (!next || timer.at < next.at || (timer.at === next.at && timer.seq < next.seq))
+            next = { id, ...timer };
         }
         if (!next) break;
         timers.delete(next.id);
@@ -222,8 +230,13 @@ function abortError(): Error {
 }
 
 export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
-  const clock: Clock = options.clock ?? { now: Date.now, setTimeout, clearTimeout: (h) => clearTimeout(h as never) };
-  const routes: { method: string; pattern: RegExp; keys: string[]; absolute: boolean; handler: Handler }[] = [];
+  const clock: Clock = options.clock ?? {
+    now: Date.now,
+    setTimeout,
+    clearTimeout: (h) => clearTimeout(h as never),
+  };
+  const routes: { method: string; pattern: RegExp; keys: string[]; absolute: boolean; handler: Handler }[] =
+    [];
   const failures: ('network' | 'timeout' | 502 | 503)[] = [];
   let drops = 0;
   const requests: FakeRequest[] = [];
@@ -308,7 +321,8 @@ export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
     },
     subscribedTopics() {
       const all = new Set<string>();
-      for (const socket of sockets) if (socket.readyState === 1) for (const topic of socket.topics) all.add(topic);
+      for (const socket of sockets)
+        if (socket.readyState === 1) for (const topic of socket.topics) all.add(topic);
       return [...all].sort();
     },
     openSockets: () => [...sockets].filter((socket) => socket.readyState === 1).length,
@@ -344,7 +358,10 @@ export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
     };
   }
 
-  function authError(status: 'unauthenticated' | 'permission-denied', reason: AuthFailureReason): ApiErrorInit {
+  function authError(
+    status: 'unauthenticated' | 'permission-denied',
+    reason: AuthFailureReason,
+  ): ApiErrorInit {
     const messages: Record<AuthFailureReason, string> = {
       token_expired: 'Your session has expired.',
       token_invalid: 'Sign in to continue.',
@@ -375,13 +392,18 @@ export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
   }
 
   const body = (request: FakeRequest): Record<string, unknown> =>
-    request.body !== null && typeof request.body === 'object' ? (request.body as Record<string, unknown>) : {};
+    request.body !== null && typeof request.body === 'object'
+      ? (request.body as Record<string, unknown>)
+      : {};
 
   server.on('POST', '/auth/register', (request) => {
     const input = body(request);
     const email = String(input.email ?? '').toLowerCase();
     if ([...accounts.values()].some((account) => account.email === email)) {
-      return { status: 'already-exists', message: 'An account with this email already exists. Try signing in.' };
+      return {
+        status: 'already-exists',
+        message: 'An account with this email already exists. Try signing in.',
+      };
     }
     const { uid } = server.addAccount({ email, password: String(input.password ?? ''), profile: null });
     return { body: newSession(uid) };
@@ -439,7 +461,8 @@ export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
 
   server.on('POST', '/auth/logout-all', (request) => {
     if (!request.uid) return authError('unauthenticated', 'token_invalid');
-    for (const session of sessions.values()) if (session.uid === request.uid) session.revoked = 'session_revoked';
+    for (const session of sessions.values())
+      if (session.uid === request.uid) session.revoked = 'session_revoked';
     return { status: 204 };
   });
 
@@ -507,7 +530,10 @@ export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
       });
     }
     if (failure === 502 || failure === 503) {
-      return new Response('<html>Bad gateway</html>', { status: failure, headers: { 'content-type': 'text/html' } });
+      return new Response('<html>Bad gateway</html>', {
+        status: failure,
+        headers: { 'content-type': 'text/html' },
+      });
     }
 
     let uid: string | null = null;
@@ -518,13 +544,25 @@ export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
       if ('uid' in checked) uid = checked.uid;
       else answer = checked;
     }
-    const request: FakeRequest = { method, path, query: url.searchParams, headers, body: await readBody(init), uid };
+    const request: FakeRequest = {
+      method,
+      path,
+      query: url.searchParams,
+      headers,
+      body: await readBody(init),
+      uid,
+    };
     requests.push(request);
 
     if (!answer) {
       const route = [...routes]
         .reverse()
-        .find((candidate) => candidate.method === method && candidate.absolute === path.startsWith('http') && candidate.pattern.test(path));
+        .find(
+          (candidate) =>
+            candidate.method === method &&
+            candidate.absolute === path.startsWith('http') &&
+            candidate.pattern.test(path),
+        );
       if (!route) {
         answer = { status: 'not-found', message: `No route for ${method} ${path}` };
       } else {
@@ -636,7 +674,8 @@ export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
           const denied: { topic: string; reason: string }[] = [];
           for (const topic of frame.topics) {
             if (deniedTopics.has(topic)) denied.push({ topic, reason: 'permission-denied' });
-            else if (this.uid === null && !PUBLIC_TOPIC.test(topic)) denied.push({ topic, reason: 'unauthenticated' });
+            else if (this.uid === null && !PUBLIC_TOPIC.test(topic))
+              denied.push({ topic, reason: 'unauthenticated' });
             else {
               this.topics.add(topic);
               granted.push(topic);
@@ -684,7 +723,9 @@ export function createFakeServer(options: { clock?: Clock } = {}): FakeServer {
 // ---------- the wired client ----------
 
 /** A client wired to a fake server, a fake clock, memory storages and a fake lifecycle. */
-export function createTestClient(overrides: Partial<ApiClientOptions> & { server?: FakeServer; clock?: FakeClock } = {}): {
+export function createTestClient(
+  overrides: Partial<ApiClientOptions> & { server?: FakeServer; clock?: FakeClock } = {},
+): {
   client: ApiClient;
   server: FakeServer;
   clock: FakeClock;
@@ -694,8 +735,10 @@ export function createTestClient(overrides: Partial<ApiClientOptions> & { server
 } {
   const clock = overrides.clock ?? createFakeClock();
   const server = overrides.server ?? createFakeServer({ clock });
-  const secrets = (overrides.secretStorage as ReturnType<typeof createMemoryStorage> | undefined) ?? createMemoryStorage();
-  const cache = (overrides.cacheStorage as ReturnType<typeof createMemoryStorage> | undefined) ?? createMemoryStorage();
+  const secrets =
+    (overrides.secretStorage as ReturnType<typeof createMemoryStorage> | undefined) ?? createMemoryStorage();
+  const cache =
+    (overrides.cacheStorage as ReturnType<typeof createMemoryStorage> | undefined) ?? createMemoryStorage();
   const lifecycle =
     (overrides.lifecycle as ReturnType<typeof createFakeLifecycle> | undefined) ?? createFakeLifecycle();
   let uuid = 0;

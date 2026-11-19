@@ -36,8 +36,10 @@ async function settle(kit: Kit, ms = 0): Promise<void> {
 test('useLiveQuery: the result sequence across a key change', async () => {
   const kit = await signedIn();
   const releases = new Map<string, (answer: FakeAnswer) => void>();
-  kit.server.on('GET', '/lists/:name', (_request, params) =>
-    new Promise<FakeAnswer>((resolve) => releases.set(params.name ?? '', resolve)),
+  kit.server.on(
+    'GET',
+    '/lists/:name',
+    (_request, params) => new Promise<FakeAnswer>((resolve) => releases.set(params.name ?? '', resolve)),
   );
   const list = (name: string): QueryDescriptor<string[]> => ({
     key: ['things', name],
@@ -105,11 +107,17 @@ test('useApiMutation: busy while running; a double call returns the first promis
   assert.equal(result.current.error, null);
   assert.equal(calls, 1);
 
-  kit.server.on('POST', '/call/claimJob', () => ({ status: 'failed-precondition', code: 'JOB_TAKEN', message: 'Taken.' }));
+  kit.server.on('POST', '/call/claimJob', () => ({
+    status: 'failed-precondition',
+    code: 'OFFER_TAKEN',
+    message: 'Taken.',
+  }));
   await act(async () => {
     await result.current.run('d2').catch(() => undefined);
   });
-  assert.equal(result.current.error?.status, 'failed-precondition');
+  // Read through a function: `assert.equal(…, null)` above narrowed `result.current.error` to null.
+  const errorNow = () => result.current.error;
+  assert.equal(errorNow()?.status, 'failed-precondition');
   act(() => result.current.reset());
   assert.equal(result.current.error, null);
 });
@@ -139,7 +147,10 @@ test('useFileUrl refreshes the URL a minute before it expires', async () => {
   kit.server.on('GET', '/files/url', (request) => {
     n += 1;
     return {
-      body: { url: `https://files.test/${request.query.get('path')}?v=${n}`, expiresAt: kit.clock.now() + 300_000 },
+      body: {
+        url: `https://files.test/${request.query.get('path')}?v=${n}`,
+        expiresAt: kit.clock.now() + 300_000,
+      },
     };
   });
   const { result, rerender } = renderHook(({ path }: { path: string | null }) => useFileUrl(path), {

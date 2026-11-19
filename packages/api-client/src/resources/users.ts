@@ -24,7 +24,9 @@ export function createUsers(ctx: ResourceContext) {
       ),
     /** Admin: admins, dispatchers and customers (drivers and supplier users have their own commands). */
     setStatus: (uid: string, patch: UserStatusPatch) =>
-      writeThen(ctx, [['user', uid], ['users']], () => ctx.rest.patch<UserProfile>(userPaths.status(uid), patch)),
+      writeThen(ctx, [['user', uid], ['users']], () =>
+        ctx.rest.patch<UserProfile>(userPaths.status(uid), patch),
+      ),
     /** Admin: signs that account out everywhere; the account stays usable. */
     revokeSessions: (uid: string) =>
       writeThen(ctx, [['user-sessions', uid]], () => ctx.rest.post(userPaths.revokeSessions(uid))),

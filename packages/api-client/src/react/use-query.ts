@@ -18,10 +18,9 @@ function useObservedQuery<T>(query: QueryDescriptor<T>, live: boolean): QueryRes
   const latest = useRef(query);
   latest.current = query;
   const stamp = QueryObserver.stampOf(query as QueryDescriptor<unknown>);
+  // `stamp` changes exactly when the key or `enabled` changes: that, and only that, re-subscribes.
   const subscribe = useCallback(
-    (onChange: () => void) => observer.observe(latest.current, live, onChange),
-    // `stamp` changes exactly when the key or `enabled` changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    (onChange: () => void) => observer.observe(latest.current, live, onChange, stamp),
     [observer, stamp, live],
   );
   const getSnapshot = useCallback(() => observer.getResult(latest.current), [observer]);

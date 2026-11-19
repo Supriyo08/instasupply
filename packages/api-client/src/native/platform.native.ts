@@ -4,7 +4,13 @@ import * as Network from 'expo-network';
 import * as SecureStore from 'expo-secure-store';
 import { AppState, type AppStateStatus } from 'react-native';
 
-import type { KeyValueStorage, Lifecycle, LifecycleEvent, PlatformBindings, SecretStorage } from '../platform';
+import type {
+  KeyValueStorage,
+  Lifecycle,
+  LifecycleEvent,
+  PlatformBindings,
+  SecretStorage,
+} from '../platform';
 
 /**
  * AFTER_FIRST_UNLOCK: the driver's background location task must read the session while the phone is

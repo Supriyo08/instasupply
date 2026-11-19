@@ -8,10 +8,16 @@ import type {
   ProfilePatch,
   WithId,
 } from '../contract';
-import { ApiError, toApiError } from '../errors';
+import { type ApiError, toApiError } from '../errors';
 import type { HttpPipeline } from '../http';
 import type { LiveClient } from '../live/live-client';
-import { STORAGE_KEYS, type Clock, type KeyValueStorage, type Lifecycle, type SecretStorage } from '../platform';
+import {
+  STORAGE_KEYS,
+  type Clock,
+  type KeyValueStorage,
+  type Lifecycle,
+  type SecretStorage,
+} from '../platform';
 import { topics } from '../topics';
 
 import { LogoutQueue } from './logout-queue';
@@ -66,7 +72,9 @@ export interface SessionCore {
   requestPasswordReset(email: string): Promise<void>;
   resetPassword(input: { email: string; code: string; newPassword: string }): Promise<void>;
   changePassword(input: { currentPassword: string; newPassword: string }): Promise<void>;
-  inspectInvite(token: string): Promise<{ email: string; displayName: string; role: Role; expiresAt: number }>;
+  inspectInvite(
+    token: string,
+  ): Promise<{ email: string; displayName: string; role: Role; expiresAt: number }>;
   setUpPassword(input: { token: string; password: string }): Promise<SessionSnapshot>;
 
   acknowledgeEnd(): void;
@@ -265,7 +273,11 @@ export class SessionCoreImpl implements SessionCore {
       let done = false;
       if (options?.everywhere) {
         try {
-          await this.deps.http.request({ method: 'POST', path: '/auth/logout-all', timeoutMs: LOGOUT_TIMEOUT_MS });
+          await this.deps.http.request({
+            method: 'POST',
+            path: '/auth/logout-all',
+            timeoutMs: LOGOUT_TIMEOUT_MS,
+          });
           done = true;
         } catch {
           // Fall back to ending this device's session; the user can repeat "everywhere" later.
@@ -314,7 +326,12 @@ export class SessionCoreImpl implements SessionCore {
   // ---------- passwords and invites ----------
 
   async requestPasswordReset(email: string): Promise<void> {
-    await this.deps.http.request({ method: 'POST', path: '/auth/password/forgot', body: { email }, auth: 'none' });
+    await this.deps.http.request({
+      method: 'POST',
+      path: '/auth/password/forgot',
+      body: { email },
+      auth: 'none',
+    });
   }
 
   async resetPassword(input: { email: string; code: string; newPassword: string }): Promise<void> {
@@ -383,12 +400,7 @@ export class SessionCoreImpl implements SessionCore {
 
   private async restore(): Promise<SessionSnapshot> {
     void this.logoutQueue.flush().catch(() => undefined);
-    let stored = null;
-    try {
-      stored = await this.deps.tokens.loadStored();
-    } catch {
-      stored = null;
-    }
+    const stored = await this.deps.tokens.loadStored().catch(() => null);
     this.markTokensRead();
     if (!stored) {
       this.set({ ...SIGNED_OUT, endReason: this.snapshot.endReason });
@@ -439,7 +451,10 @@ export class SessionCoreImpl implements SessionCore {
     }
     await this.deps.tokens.adopt(response, uid);
     if (response.me) await this.applyMe(response.me, { endReason: null });
-    else await this.applyMe(await this.deps.http.request<MeResponse>({ method: 'GET', path: '/me' }), { endReason: null });
+    else
+      await this.applyMe(await this.deps.http.request<MeResponse>({ method: 'GET', path: '/me' }), {
+        endReason: null,
+      });
     return this.snapshot;
   }
 
@@ -514,7 +529,8 @@ export class SessionCoreImpl implements SessionCore {
     const mine = this.snapshot.user?.uid ?? this.deps.tokens.session?.uid ?? null;
     const next = parseStoredSession(value);
     if (!next) {
-      if (mine !== null || this.deps.tokens.hasSession()) void this.endSession('signed_out', { external: true });
+      if (mine !== null || this.deps.tokens.hasSession())
+        void this.endSession('signed_out', { external: true });
       return;
     }
     if (mine === null) {

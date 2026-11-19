@@ -233,7 +233,10 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     clock,
     live,
     lifecycle: options.lifecycle,
-    session: { status: () => session.getSnapshot().status, subscribe: (listener) => session.subscribe(listener) },
+    session: {
+      status: () => session.getSnapshot().status,
+      subscribe: (listener) => session.subscribe(listener),
+    },
     serverNow: () => clock.now() + offset,
   });
   late.cache = cache;

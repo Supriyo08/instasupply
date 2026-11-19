@@ -8,16 +8,16 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
+    "dev": "tsx watch --import ./src/platform/dev/register.mjs --env-file-if-exists=.env src/server.ts",
     "build": "node build.mjs",
     "start": "node dist/server.js",
-    "migrate": "tsx --env-file-if-exists=.env src/cli.ts migrate",
-    "seed": "tsx --env-file-if-exists=.env src/cli.ts seed --demo",
-    "create-admin": "tsx --env-file-if-exists=.env src/cli.ts create-admin",
-    "simulate": "tsx --env-file-if-exists=.env scripts/simulate-driver.ts",
-    "db": "tsx --env-file-if-exists=.env scripts/db.ts",
-    "test": "tsx test/support/run.ts",
-    "test:platform": "node --import tsx --test --test-concurrency=4 test/platform/*.test.ts test/auth/*.test.ts",
+    "migrate": "tsx --import ./src/platform/dev/register.mjs --env-file-if-exists=.env src/cli.ts migrate",
+    "seed": "tsx --import ./src/platform/dev/register.mjs --env-file-if-exists=.env src/cli.ts seed --demo",
+    "create-admin": "tsx --import ./src/platform/dev/register.mjs --env-file-if-exists=.env src/cli.ts create-admin",
+    "simulate": "tsx --import ./src/platform/dev/register.mjs --env-file-if-exists=.env scripts/simulate-driver.ts",
+    "db": "tsx --import ./src/platform/dev/register.mjs --env-file-if-exists=.env scripts/db.ts",
+    "test": "tsx --import ./src/platform/dev/register.mjs test/support/run.ts",
+    "test:platform": "NODE_ENV=test node --import tsx --import ./src/platform/dev/register.mjs --test --test-concurrency=4 test/platform/*.test.ts test/auth/*.test.ts",
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {

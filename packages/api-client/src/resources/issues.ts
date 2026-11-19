@@ -14,7 +14,9 @@ export function createIssues(ctx: ResourceContext) {
   return {
     /** Staff: assignee and `in_review` only. */
     update: (issueId: string, patch: AssignPatch) =>
-      writeThen(ctx, [['issue', issueId], ['issues']], () => ctx.rest.patch<Issue>(issuePaths.issue(issueId), patch)),
+      writeThen(ctx, [['issue', issueId], ['issues']], () =>
+        ctx.rest.patch<Issue>(issuePaths.issue(issueId), patch),
+      ),
     saveNotes: (issueId: string, notes: string) =>
       writeThen(ctx, [['issue-notes', issueId]], () =>
         ctx.rest.put<IssueNotes>(issuePaths.notes(issueId), { notes }),

@@ -1,4 +1,11 @@
-import type { ChatMessage, ChatThread, Delivery, DeliveryEvent, JobOffer, RoutePlan } from '@instasupply/shared';
+import type {
+  ChatMessage,
+  ChatThread,
+  Delivery,
+  DeliveryEvent,
+  JobOffer,
+  RoutePlan,
+} from '@instasupply/shared';
 
 import type { DeliveryStats, WithId } from '../contract';
 import { chatPaths } from '../resources/chat';
@@ -74,12 +81,18 @@ export const driverQueries = {
 
   deliveryEvents: (deliveryId: string | null | undefined) => {
     const id = idOrNull(deliveryId);
-    return listQuery<DeliveryEvent>(['delivery-events', id], id !== null, deliveryPaths.events(id ?? ''), {}, {
-      limit: 30,
-      follow: false,
-      topics: id ? [topics.delivery(id)] : [],
-      pollS: 30,
-    });
+    return listQuery<DeliveryEvent>(
+      ['delivery-events', id],
+      id !== null,
+      deliveryPaths.events(id ?? ''),
+      {},
+      {
+        limit: 30,
+        follow: false,
+        topics: id ? [topics.delivery(id)] : [],
+        pollS: 30,
+      },
+    );
   },
 
   deliveryStats: (driverId: string | null | undefined, sinceMs: number) => {
@@ -112,12 +125,18 @@ export const driverQueries = {
 
   chatMessages: (driverId: string | null | undefined) => {
     const id = idOrNull(driverId);
-    return listQuery<ChatMessage>(['chat-messages', id], id !== null, chatPaths.messages(id ?? ''), {}, {
-      limit: 100,
-      follow: false,
-      topics: id ? [topics.chatThread(id)] : [],
-      pollS: 10,
-      reduce: appendMessage,
-    });
+    return listQuery<ChatMessage>(
+      ['chat-messages', id],
+      id !== null,
+      chatPaths.messages(id ?? ''),
+      {},
+      {
+        limit: 100,
+        follow: false,
+        topics: id ? [topics.chatThread(id)] : [],
+        pollS: 10,
+        reduce: appendMessage,
+      },
+    );
   },
 };

@@ -7,7 +7,7 @@ import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { LogController, type FastifyInstance } from 'fastify';
 import type { Deps } from './container';
 import { authenticateHeader } from './platform/auth/authenticate';
 import { hmacHex } from './platform/crypto';
@@ -83,17 +83,17 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   // instance type, and pino's Logger is a FastifyBaseLogger at run time.
   const app = Fastify({
     loggerInstance: deps.log,
-    disableRequestLogging: true,
+    // Fastify's own "incoming request" / "request completed" lines carry req.url and remoteAddress (§4.3).
+    logController: new LogController({ disableRequestLogging: true, requestIdLogLabel: 'reqId' }),
     trustProxy: false,
     requestIdHeader: false,
-    requestIdLogLabel: 'reqId',
     genReqId: (req) => {
       const inbound = req.headers['x-request-id'];
       return typeof inbound === 'string' && REQUEST_ID.test(inbound) ? inbound : newId();
     },
     return503OnClosing: true,
     bodyLimit: 1_048_576,
-    maxParamLength: 100,
+    routerOptions: { maxParamLength: 100 },
   }) as unknown as FastifyInstance;
 
   installErrorHandlers(app);

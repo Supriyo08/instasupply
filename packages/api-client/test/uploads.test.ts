@@ -37,7 +37,10 @@ async function withPresign(presigned: Partial<PresignedUpload>) {
 
 function formEntries(request: FakeRequest | undefined): [string, string][] {
   assert.ok(request?.body instanceof FormData, 'a multipart form was sent');
-  return [...request.body.entries()].map(([name, value]) => [name, typeof value === 'string' ? value : `file:${value.name}`]);
+  return [...request.body.entries()].map(([name, value]) => [
+    name,
+    typeof value === 'string' ? value : `file:${value.name}`,
+  ]);
 }
 
 test('S3 presigned POST: every field in order, then the file last, without our headers', async () => {
@@ -72,7 +75,10 @@ test('S3 presigned POST: every field in order, then the file last, without our h
 });
 
 test("the local driver's form: a token field, POST /files/local/{uploadId}", async () => {
-  const kit = await withPresign({ url: 'https://api.test/api/v1/files/local/up1', fields: { token: 'tok_1' } });
+  const kit = await withPresign({
+    url: 'https://api.test/api/v1/files/local/up1',
+    fields: { token: 'tok_1' },
+  });
   let target: FakeRequest | undefined;
   kit.server.on('POST', '/files/local/:uploadId', (request) => {
     target = request;
@@ -87,7 +93,11 @@ test("the local driver's form: a token field, POST /files/local/{uploadId}", asy
 });
 
 test('PUT with the presigned headers (forward compatibility only)', async () => {
-  const kit = await withPresign({ method: 'PUT', url: 'https://storage.test/put', headers: { 'Content-Type': 'image/jpeg' } });
+  const kit = await withPresign({
+    method: 'PUT',
+    url: 'https://storage.test/put',
+    headers: { 'Content-Type': 'image/jpeg' },
+  });
   let target: FakeRequest | undefined;
   kit.server.on('PUT', 'https://storage.test/put', (request) => {
     target = request;
@@ -118,7 +128,10 @@ test('local validation against UPLOAD_LIMITS, before any request', async () => {
 
 test('a failure at each step rejects', async () => {
   const presignFails = await withPresign({});
-  presignFails.server.on('POST', '/files/presign', () => ({ status: 'permission-denied', message: 'Not your delivery.' }));
+  presignFails.server.on('POST', '/files/presign', () => ({
+    status: 'permission-denied',
+    message: 'Not your delivery.',
+  }));
   await assert.rejects(
     presignFails.client.upload({ purpose: 'proof', ownerId: 'd1', source: photo() }),
     (e: unknown) => (e as ApiError).status === 'permission-denied',
@@ -134,7 +147,10 @@ test('a failure at each step rejects', async () => {
 
   const confirmFails = await withPresign({});
   confirmFails.server.on('POST', 'https://storage.test/bucket', () => ({ status: 204 }));
-  confirmFails.server.on('POST', '/files/confirm', () => ({ status: 'failed-precondition', message: 'File missing.' }));
+  confirmFails.server.on('POST', '/files/confirm', () => ({
+    status: 'failed-precondition',
+    message: 'File missing.',
+  }));
   await assert.rejects(
     confirmFails.client.upload({ purpose: 'proof', ownerId: 'd1', source: photo() }),
     (e: unknown) => (e as ApiError).status === 'failed-precondition',

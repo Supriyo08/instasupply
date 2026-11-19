@@ -410,7 +410,8 @@ export class LiveClientImpl implements LiveClient {
       this.topics.delete(topic);
       this.pending.delete(topic);
       if (this.denied.delete(topic)) for (const listener of [...this.deniedListeners]) listener();
-      if (this.sent.delete(topic) && this.state === 'open') this.send({ type: 'unsubscribe', topics: [topic] });
+      if (this.sent.delete(topic) && this.state === 'open')
+        this.send({ type: 'unsubscribe', topics: [topic] });
     }, UNSUBSCRIBE_GRACE_MS);
     this.unsubscribeTimers.set(topic, timer);
   }

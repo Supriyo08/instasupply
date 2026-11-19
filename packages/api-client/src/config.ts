@@ -114,13 +114,19 @@ export class ConfigStoreImpl implements ConfigStore {
 
   private async runLoad(): Promise<PublicConfig> {
     try {
-      const config = await this.deps.http.request<PublicConfig>({ method: 'GET', path: '/config', auth: 'none' });
+      const config = await this.deps.http.request<PublicConfig>({
+        method: 'GET',
+        path: '/config',
+        auth: 'none',
+      });
       this.config = config;
       this.lastError = null;
       this.loadedAt = this.deps.clock.now();
       this.deps.setServerTime(config.serverTime);
       const cached: CachedConfig = { config, savedAt: this.loadedAt };
-      await this.deps.cacheStorage.setItem(STORAGE_KEYS.config, JSON.stringify(cached)).catch(() => undefined);
+      await this.deps.cacheStorage
+        .setItem(STORAGE_KEYS.config, JSON.stringify(cached))
+        .catch(() => undefined);
       this.notify();
       return config;
     } catch (error) {

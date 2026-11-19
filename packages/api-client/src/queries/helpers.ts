@@ -34,7 +34,10 @@ export function docQuery<T>(
   key: QueryKey,
   enabled: boolean,
   path: () => string,
-  options: DescriptorOptions<T | null> & { query?: Record<string, QueryValue>; notFoundAsNull?: boolean } = {},
+  options: DescriptorOptions<T | null> & {
+    query?: Record<string, QueryValue>;
+    notFoundAsNull?: boolean;
+  } = {},
 ): QueryDescriptor<T | null> {
   return {
     ...common(key, enabled, options),
@@ -100,7 +103,10 @@ export function pagedQuery<T>(
   enabled: boolean,
   path: string,
   query: Record<string, QueryValue>,
-  options: Omit<DescriptorOptions<T[]>, 'reduce' | 'expiresAt'> & { idOf?: (item: T) => string; limit?: number } = {},
+  options: Omit<DescriptorOptions<T[]>, 'reduce' | 'expiresAt'> & {
+    idOf?: (item: T) => string;
+    limit?: number;
+  } = {},
 ): PagedQueryDescriptor<T> {
   const idOf = options.idOf ?? ((item: T) => (item as { id: string }).id);
   return {
@@ -123,7 +129,10 @@ export function replaceWithPayload<T>(_current: T, event: LiveEvent): T | typeof
 }
 
 /** Payload `message` events append by id (chat, support); anything else refetches. */
-export function appendMessage<T extends { id: string }>(current: T[], event: LiveEvent): T[] | typeof REFETCH {
+export function appendMessage<T extends { id: string }>(
+  current: T[],
+  event: LiveEvent,
+): T[] | typeof REFETCH {
   if (event.kind !== 'message' || event.data === undefined) return REFETCH;
   const message = event.data as T;
   const index = current.findIndex((item) => item.id === message.id);
@@ -134,7 +143,10 @@ export function appendMessage<T extends { id: string }>(current: T[], event: Liv
 }
 
 /** Payload `created` notifications are prepended; read flags and deletions refetch. */
-export function prependCreated<T extends { id: string }>(current: T[], event: LiveEvent): T[] | typeof REFETCH {
+export function prependCreated<T extends { id: string }>(
+  current: T[],
+  event: LiveEvent,
+): T[] | typeof REFETCH {
   if (event.kind !== 'created' || event.data === undefined) return REFETCH;
   const item = event.data as T;
   return [item, ...current.filter((existing) => existing.id !== item.id)];
