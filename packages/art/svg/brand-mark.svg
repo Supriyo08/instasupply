@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
+<defs><linearGradient id="brand-mark-g1" x2="1" y2="1"><stop offset="0" stop-color="#8ED64C"/><stop offset="1" stop-color="#4CAF1E"/></linearGradient><linearGradient id="brand-mark-g2" x2="1" y2="1"><stop offset="0" stop-color="#3FC75A"/><stop offset="1" stop-color="#1F9A3A"/></linearGradient></defs>
+<g stroke-linecap="round">
+<path d="M80 98V82C80 44 150 44 150 82V98" stroke="#28B446" stroke-width="13" fill="none"/>
+<path d="M150 94C146 60 166 36 202 30C206 66 186 92 150 94Z" fill="url(#brand-mark-g2)"/>
+<path d="M156 88C168 70 180 54 196 40" stroke="#8ED64C" stroke-width="3.5" fill="none"/>
+<path d="M146 96C124 82 118 60 128 40C148 52 156 74 146 96Z" fill="#AEDC81"/>
+<path d="M144 88C140 74 136 62 130 50" stroke="#7BC74D" stroke-width="3" fill="none"/>
+<path d="M58 90H172Q182 90 183 100L191 196Q192 212 176 212H54Q38 212 39 196L47 100Q48 90 58 90Z" fill="url(#brand-mark-g1)"/>
+<path d="M58 90H172Q182 90 183 100L184 106H46L47 100Q48 90 58 90Z" fill="#fff" opacity=".22"/>
+<path d="M56 116L51 190" stroke="#fff" stroke-opacity=".3" stroke-width="5"/>
+<path d="M84 150Q115 180 146 150" stroke="#fff" stroke-width="12" fill="none"/>
+<ellipse cx="88" cy="126" rx="6.5" ry="8" fill="#fff"/><ellipse cx="142" cy="126" rx="6.5" ry="8" fill="#fff"/>
+</g>
+</svg>

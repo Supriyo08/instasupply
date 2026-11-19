@@ -1,0 +1,292 @@
+rules_version = '2';
+
+// InstaSupply Firestore security rules.
+//
+// Principles:
+//  * Roles come from custom claims set by Cloud Functions (`role`, `active`). Clients can't set them.
+//  * Business-critical writes (status changes, assignment, creation) go through callables only.
+//  * Clients may only write the few fields they own, validated here.
+//  * Everything not explicitly allowed is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+    function role() {
+      return signedIn() ? request.auth.token.get('role', '') : '';
+    }
+    function isActive() {
+      return signedIn() && request.auth.token.get('active', false) == true;
+    }
+    function isStaff() {
+      return role() in ['admin', 'dispatcher'] && isActive();
+    }
+    function isDriver() {
+      return role() == 'driver';
+    }
+    function isActiveDriver() {
+      return isDriver() && isActive();
+    }
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+    function onlyChanges(keys) {
+      return changedKeys().hasOnly(keys);
+    }
+    function isText(value, minLength, maxLength) {
+      return value is string && value.size() >= minLength && value.size() <= maxLength;
+    }
+    function isNullableNumber(value) {
+      return value == null || value is number;
+    }
+    function isCustomer() {
+      return role() == 'customer' && isActive();
+    }
+
+    // ---------- users ----------
+    match /users/{uid} {
+      allow get: if isSelf(uid) || isStaff();
+      allow list: if isStaff();
+      allow create, delete: if false;
+      allow update: if isSelf(uid)
+        && onlyChanges(['displayName', 'vehicle', 'photoURL', 'preferences', 'updatedAt'])
+        && isText(request.resource.data.displayName, 1, 80)
+        && (!('preferences' in request.resource.data) || request.resource.data.preferences is map)
+        && (!('vehicle' in request.resource.data)
+            || request.resource.data.vehicle == null
+            || (request.resource.data.vehicle.type in ['bike', 'scooter', 'car', 'van', 'truck']
+                && isText(request.resource.data.vehicle.plate, 1, 20)));
+
+      // Customer address book (validated; location is optional, checkout geocodes it).
+      match /addresses/{addressId} {
+        allow read, delete: if isSelf(uid);
+        allow create, update: if isSelf(uid) && isValidAddress(request.resource.data);
+      }
+
+      match /favorites/{productId} {
+        allow read, delete: if isSelf(uid);
+        allow create: if isSelf(uid)
+          && request.resource.data.keys().hasOnly(['productId', 'createdAt'])
+          && request.resource.data.productId == productId
+          && request.resource.data.createdAt == request.time;
+      }
+
+      // Saved cards keep only brand, last 4 digits and expiry: a full card number can never be stored.
+      match /cards/{cardId} {
+        allow read, delete: if isSelf(uid);
+        allow create, update: if isSelf(uid) && isValidCard(request.resource.data);
+      }
+
+      match /devices/{deviceId} {
+        allow read, delete: if isSelf(uid);
+        allow create, update: if isSelf(uid)
+          && request.resource.data.keys().hasOnly(
+               ['token', 'provider', 'platform', 'appVersion', 'deviceName', 'createdAt', 'lastSeenAt'])
+          && isText(request.resource.data.token, 10, 4096)
+          && request.resource.data.provider in ['fcm', 'expo']
+          && request.resource.data.platform in ['ios', 'android', 'web'];
+      }
+    }
+
+    // ---------- live driver positions ----------
+    function isValidLocation(data) {
+      return data.keys().hasOnly(['lat', 'lng', 'heading', 'speed', 'accuracy', 'online', 'battery', 'updatedAt'])
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && data.online is bool
+        && isNullableNumber(data.get('heading', null))
+        && isNullableNumber(data.get('speed', null))
+        && isNullableNumber(data.get('accuracy', null))
+        && isNullableNumber(data.get('battery', null))
+        && data.updatedAt == request.time;
+    }
+
+    match /driverLocations/{uid} {
+      allow read: if isStaff() || isSelf(uid);
+      allow create, update: if isSelf(uid) && isActiveDriver() && isValidLocation(request.resource.data);
+      allow delete: if false;
+    }
+
+    // ---------- deliveries ----------
+    match /deliveries/{deliveryId} {
+      allow read: if isStaff() || (isDriver() && resource.data.driverId == request.auth.uid);
+      allow create, delete: if false;
+      // Staff can edit customer & drop-off details. Status and assignment go through callables.
+      allow update: if isStaff()
+        && onlyChanges(['customer', 'address', 'location', 'addressNotes', 'notes', 'packageCount',
+                        'priority', 'codAmount', 'requireCode', 'windowStart', 'windowEnd',
+                        'updatedAt', 'updatedBy'])
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time
+        && isText(request.resource.data.address, 3, 300)
+        && request.resource.data.priority in ['normal', 'high', 'urgent']
+        && request.resource.data.location.lat is number
+        && request.resource.data.location.lng is number;
+
+      match /events/{eventId} {
+        allow read: if isStaff()
+          || (isDriver()
+              && get(/databases/$(database)/documents/deliveries/$(deliveryId)).data.driverId == request.auth.uid);
+        allow write: if false;
+      }
+
+      // Tracking token and hand-off code. Drivers must never see the code.
+      match /private/{docId} {
+        allow read: if isStaff();
+        allow write: if false;
+      }
+    }
+
+    // Activity feed across every delivery (collection group query).
+    match /{path=**}/events/{eventId} {
+      allow read: if isStaff();
+    }
+
+    // ---------- planned routes ----------
+    match /routes/{driverId} {
+      allow read: if isStaff() || isSelf(driverId);
+      allow write: if false;
+    }
+
+    // ---------- in-app notifications ----------
+    match /notifications/{notificationId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && onlyChanges(['read', 'readAt'])
+        && request.resource.data.read == true;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if false;
+    }
+
+    // ---------- dispatch <-> driver chat ----------
+    function isValidMessage(driverId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['text', 'senderId', 'senderName', 'senderRole', 'deliveryId', 'kind', 'createdAt'])
+        && data.senderId == request.auth.uid
+        && data.createdAt == request.time
+        && isText(data.text, 1, 1000)
+        && isText(data.senderName, 1, 80)
+        && data.kind in ['text', 'quick_reply']
+        && (data.get('deliveryId', null) == null || data.deliveryId is string)
+        && ((isStaff() && data.senderRole == 'staff')
+            || (isSelf(driverId) && isActiveDriver() && data.senderRole == 'driver'));
+    }
+
+    match /threads/{driverId} {
+      allow read: if isStaff() || isSelf(driverId);
+      allow create, delete: if false;
+      // Participants may only reset their own unread counter.
+      allow update: if (isStaff()
+                        && onlyChanges(['unreadByStaff', 'staffReadAt'])
+                        && request.resource.data.unreadByStaff == 0)
+                    || (isSelf(driverId)
+                        && onlyChanges(['unreadByDriver', 'driverReadAt'])
+                        && request.resource.data.unreadByDriver == 0);
+
+      match /messages/{messageId} {
+        allow read: if isStaff() || isSelf(driverId);
+        allow create: if isValidMessage(driverId);
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------- customer catalogue ----------
+    function isValidAddress(data) {
+      return data.keys().hasOnly(['label', 'name', 'phone', 'line1', 'line2', 'landmark', 'city', 'zip',
+                                  'location', 'isDefault', 'createdAt', 'updatedAt'])
+        && isText(data.label, 1, 20)
+        && isText(data.name, 1, 80)
+        && isText(data.phone, 8, 16)
+        && isText(data.line1, 3, 160)
+        && isText(data.city, 1, 60)
+        && isText(data.zip, 3, 10)
+        && data.isDefault is bool
+        && (data.get('line2', null) == null || isText(data.line2, 0, 160))
+        && (data.get('landmark', null) == null || isText(data.landmark, 0, 100))
+        && (data.get('location', null) == null
+            || (data.location.lat is number && data.location.lng is number));
+    }
+
+    function isValidCard(data) {
+      return data.keys().hasOnly(['brand', 'last4', 'expMonth', 'expYear', 'holder', 'isDefault', 'createdAt'])
+        && data.brand in ['visa', 'mastercard', 'rupay', 'amex', 'card']
+        && data.last4 is string && data.last4.matches('^[0-9]{4}$')
+        && data.expMonth is int && data.expMonth >= 1 && data.expMonth <= 12
+        && data.expYear is int && data.expYear >= 2024 && data.expYear <= 2100
+        && isText(data.holder, 1, 80)
+        && data.isDefault is bool;
+    }
+
+    function isValidProduct(data) {
+      return isText(data.name, 1, 80)
+        && isText(data.categoryId, 1, 60)
+        && isText(data.unit, 1, 30)
+        && data.price is number && data.price >= 0
+        && (data.get('mrp', null) == null || data.mrp is number)
+        && data.stock is int && data.stock >= 0
+        && data.active is bool
+        && data.featured is bool
+        && isText(data.description, 0, 2000)
+        && data.updatedAt == request.time;
+    }
+
+    function isValidReview(productId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['productId', 'userId', 'userName', 'rating', 'text', 'createdAt', 'updatedAt'])
+        && data.productId == productId
+        && data.userId == request.auth.uid
+        && data.rating is int && data.rating >= 1 && data.rating <= 5
+        && isText(data.userName, 1, 80)
+        && isText(data.text, 0, 1000)
+        && data.updatedAt == request.time
+        && (resource == null ? data.createdAt == request.time : data.createdAt == resource.data.createdAt);
+    }
+
+    // The catalogue is public so people can browse before signing in.
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isStaff();
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow create, update: if isStaff() && isValidProduct(request.resource.data);
+      allow delete: if role() == 'admin' && isActive();
+
+      // One review per customer per product (document id = reviewer uid).
+      match /reviews/{userId} {
+        allow read: if true;
+        allow create, update: if isSelf(userId) && isCustomer() && isValidReview(productId);
+        allow delete: if isSelf(userId) || isStaff();
+      }
+    }
+
+    // ---------- customer orders ----------
+    // Created and updated only by Cloud Functions (pricing, stock and payment are server-side).
+    match /orders/{orderId} {
+      allow read: if isStaff() || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow write: if false;
+    }
+
+    // ---------- public tracking pages ----------
+    // Readable by anyone who holds the unguessable token; never listable.
+    match /tracking/{token} {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // ---------- dev SMS outbox (emulator / no SMS provider) ----------
+    match /devOutbox/{messageId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    // otpChallenges and counters are server-only: no client rules.
+  }
+}

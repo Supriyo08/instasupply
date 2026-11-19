@@ -1,0 +1,179 @@
+name: Deploy
+
+# Ships the backend (functions, Firestore rules and indexes, Storage rules) and the back office.
+#
+#   push to main      → staging
+#   push of a v* tag  → production
+#   Run workflow      → the same, for the ref picked under "Use workflow from": main redeploys staging,
+#                       a v* tag redeploys that release to production, and no other ref can deploy.
+#                       The form also asks for the environment. That is a second confirmation: the run
+#                       stops when it does not match the ref.
+#
+# The ref decides the target, never the form alone. Google Cloud only signs a run in when its GitHub
+# environment and its ref fit together: staging from main, production from a v* tag
+# (infra/bootstrap-project.sh sets that rule). What stands between a pushed tag and the live project
+# is the protection on the `production` environment in GitHub (reviewers, v* tags only) and the rule
+# on who may push v* tags.
+#
+# Each GitHub environment (Settings → Environments → staging / production) holds these variables:
+#   GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_DEPLOY_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID, FIREBASE_API_KEY,
+#   FIREBASE_AUTH_DOMAIN, FIREBASE_STORAGE_BUCKET, FIREBASE_MESSAGING_SENDER_ID, FIREBASE_APP_ID,
+#   FUNCTIONS_REGION, and optionally MAP_TILE_URL and MAP_ATTRIBUTION.
+# All of them are public identifiers. This workflow uses no secrets.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Confirm the target (staging when run from main, production when run from a v* tag)
+        type: choice
+        options: [staging, production]
+        default: staging
+
+# One run per environment at a time, in the order they were asked for.
+# - `queue: max` keeps every waiting run. The default keeps only the newest and cancels the others,
+#   which would silently drop a tagged release that was waiting behind another one.
+# - Nothing is cancelled once it has started: half a deploy is worse than a late one.
+# - The whole run is in the group, not only the deploy job. Otherwise two commits pushed close together
+#   would be verified side by side, and the older one could finish last and overwrite the newer one.
+#   The price: a burst of merges is checked and deployed one after another, not all at once.
+# A production run that waits for approval keeps its place in the queue. Approve or reject it: a run
+# nobody answers holds up the next release until its approval request expires.
+concurrency:
+  group: deploy-${{ startsWith(github.ref, 'refs/tags/v') && 'production' || 'staging' }}
+  cancel-in-progress: false
+  queue: max
+
+# Each job below gets only the token permissions it asks for.
+permissions: {}
+
+env:
+  # A v* tag is a production release. Anything else counts as staging, and the first job turns away
+  # every such ref except main. The same expression names the concurrency group above and the deploy
+  # job's environment below. GitHub works those two out before a job exists, where this variable
+  # cannot be read, so change all three together.
+  TARGET: ${{ startsWith(github.ref, 'refs/tags/v') && 'production' || 'staging' }}
+
+jobs:
+  request:
+    name: Check the request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      # Fails in seconds, before the checks run and before anyone is asked to approve. Without it a run
+      # from the wrong ref would pass every check and then be turned away at the Google Cloud sign-in.
+      - name: Only main and v* tags can deploy, and the form must agree
+        env:
+          CHOSEN: ${{ inputs.environment }}
+        run: |
+          if [ "$TARGET" = staging ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error title=This ref cannot deploy::${GITHUB_REF} is neither main nor a v* tag. Staging deploys from main and production from a v* tag; Google Cloud accepts nothing else. Pick main or a v* tag under 'Use workflow from'."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$CHOSEN" != "$TARGET" ]; then
+            echo "::error title=The environment does not match the ref::You chose ${CHOSEN}, but ${GITHUB_REF} deploys to ${TARGET}. For production pick a v* tag under 'Use workflow from'; for staging pick main."
+            exit 1
+          fi
+          echo "${GITHUB_REF} deploys to ${TARGET}."
+
+  # The whole CI suite, on exactly the commit that is about to ship: lint, types, unit tests, builds and
+  # the emulator tests of the callables and the security rules. A tag and a manual run get the same
+  # checks as a push to main, so nothing reaches either project without them.
+  verify:
+    name: Verify
+    needs: request
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy
+    needs: verify
+    # A fork has neither these settings nor the trust on the Google Cloud side. Skip quietly there.
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Naming the environment does three things. GitHub applies that environment's protection rules
+    # before the job starts. The job reads that environment's variables. And the identity token the job
+    # may request says `environment: staging` or `environment: production`, which is the claim Google
+    # Cloud checks before it hands out credentials.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'production' || 'staging' }}
+    permissions:
+      contents: read
+      # Lets this job, and no other, ask GitHub for the identity token that google-github-actions/auth
+      # trades for short-lived Google Cloud credentials. No service-account key is stored anywhere.
+      id-token: write
+    # Every process in this job can ask for that token. So the job does as little as it can: no tests,
+    # no dependency install scripts, and no build cache that an earlier run could have tampered with.
+    # The back office is still built here, because only a job in the environment can read its
+    # variables, and a second job in the same environment would need a second approval.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the deploy settings
+        id: settings
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          FIREBASE_API_KEY: ${{ vars.FIREBASE_API_KEY }}
+          FIREBASE_AUTH_DOMAIN: ${{ vars.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_STORAGE_BUCKET: ${{ vars.FIREBASE_STORAGE_BUCKET }}
+          FIREBASE_APP_ID: ${{ vars.FIREBASE_APP_ID }}
+          FUNCTIONS_REGION: ${{ vars.FUNCTIONS_REGION }}
+        run: bash .github/scripts/deploy-preflight.sh
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      # No install scripts. ci.yml installs the same way, so a dependency that really needs its script
+      # fails there first, not here.
+      - run: npm ci --ignore-scripts
+
+      - name: Build back office
+        run: npm run build:backoffice
+        env:
+          VITE_USE_EMULATORS: 'false'
+          VITE_FIREBASE_API_KEY: ${{ vars.FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ vars.FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.FIREBASE_APP_ID }}
+          # The environment's FUNCTIONS_REGION, after the settings check has compared it with the region
+          # the functions deploy to. Staging falls back to us-central1; production has no fallback.
+          VITE_FUNCTIONS_REGION: ${{ steps.settings.outputs.functions_region }}
+          VITE_MAP_TILE_URL: ${{ vars.MAP_TILE_URL }}
+          VITE_MAP_ATTRIBUTION: ${{ vars.MAP_ATTRIBUTION }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ vars.FIREBASE_PROJECT_ID }}
+
+      - name: Check that the Storage rules can read Firestore
+        env:
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: bash .github/scripts/check-storage-rules-access.sh
+
+      # --force answers the questions the CLI would ask a person: it deletes functions and Firestore
+      # indexes that are gone from the repo and sets the image cleanup policy. Without it a deploy with
+      # nobody at the keyboard fails or skips those steps. `npx --no` runs the firebase-tools version
+      # pinned in package-lock.json, or nothing.
+      - name: Deploy functions, rules, indexes and hosting
+        env:
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: >
+          npx --no -- firebase deploy
+          --project "$FIREBASE_PROJECT_ID"
+          --only functions,firestore,storage,hosting
+          --non-interactive --force

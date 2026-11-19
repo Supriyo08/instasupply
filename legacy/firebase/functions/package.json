@@ -1,0 +1,24 @@
+{
+  "name": "@instasupply/functions",
+  "version": "1.0.0",
+  "private": true,
+  "description": "InstaSupply Cloud Functions (Node 22, Functions v2). Bundled with esbuild so the shared package is inlined at deploy time.",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "build:watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit -p .",
+    "logs": "firebase functions:log"
+  },
+  "dependencies": {
+    "firebase-admin": "^14.5.1",
+    "firebase-functions": "^7.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "esbuild": "^0.28.2"
+  }
+}

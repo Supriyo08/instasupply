@@ -1,0 +1,13 @@
+{
+  "name": "@instasupply/art",
+  "version": "1.0.0",
+  "private": true,
+  "description": "InstaSupply vector illustrations (products, categories, scenes) as SVG strings, shared by every app.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

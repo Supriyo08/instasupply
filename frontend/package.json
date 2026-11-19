@@ -1,0 +1,35 @@
+{
+  "name": "@instasupply/frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "InstaSupply web console: ops back office, supplier portal and the public tracking page (Vite + React). Deployed on Railway.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p . && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@instasupply/art": "*",
+    "@instasupply/shared": "*",
+    "firebase": "^13.4.0",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^1.76.0",
+    "papaparse": "^5.7.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-leaflet": "^5.0.0",
+    "react-router": "^7.18.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/leaflet": "^1.9.22",
+    "@types/papaparse": "^5.5.2",
+    "@types/react": "~19.3.0",
+    "@types/react-dom": "~19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8"
+  }
+}

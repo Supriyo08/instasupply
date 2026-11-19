@@ -1,0 +1,16 @@
+{
+  "name": "@instasupply/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pure TypeScript domain package of the InstaSupply GTA construction-supply marketplace: types and API contracts, CAD money and HST pricing, vehicle classes and driver pay, Toronto time and fulfilment windows, state machines, validators, search and the route optimizer.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0"
+  }
+}

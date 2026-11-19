@@ -1,0 +1,13 @@
+node_modules
+dist
+legacy
+.expo
+web-build
+coverage
+package-lock.json
+*.md
+packages/art/src/generated.ts
+packages/art/preview
+app/*/ios
+app/*/android
+.build

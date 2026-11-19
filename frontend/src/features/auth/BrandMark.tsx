@@ -1,0 +1,13 @@
+import { cn } from '@/lib/cn';
+
+export function BrandMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 64 64" className={cn('shrink-0', className)} aria-hidden>
+      <rect width="64" height="64" rx="16" fill="#4f46e5" />
+      <path
+        d="M18 40.5 31.2 17a1.6 1.6 0 0 1 2.8 0l12 21.6a1.6 1.6 0 0 1-1.9 2.3L32 36.6l-11.9 6.2a1.6 1.6 0 0 1-2.1-2.3Z"
+        fill="#fff"
+      />
+    </svg>
+  );
+}

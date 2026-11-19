@@ -1,0 +1,48 @@
+{
+  "name": "@instasupply/backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "InstaSupply API server (Node 22, Fastify, PostgreSQL). Deployed on Railway.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
+    "build": "node build.mjs",
+    "start": "node dist/server.js",
+    "migrate": "tsx --env-file-if-exists=.env src/cli.ts migrate",
+    "seed": "tsx --env-file-if-exists=.env src/cli.ts seed --demo",
+    "create-admin": "tsx --env-file-if-exists=.env src/cli.ts create-admin",
+    "simulate": "tsx --env-file-if-exists=.env scripts/simulate-driver.ts",
+    "db": "tsx --env-file-if-exists=.env scripts/db.ts",
+    "test": "tsx test/support/run.ts",
+    "test:platform": "node --import tsx --test --test-concurrency=4 test/platform/*.test.ts test/auth/*.test.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1172.0",
+    "@aws-sdk/s3-presigned-post": "^3.1172.0",
+    "@aws-sdk/s3-request-presigner": "^3.1172.0",
+    "@fastify/cors": "^11.4.3",
+    "@fastify/helmet": "^13.2.0",
+    "@fastify/multipart": "^10.1.9",
+    "@fastify/rate-limit": "^11.2.2",
+    "@fastify/websocket": "^11.3.7",
+    "@instasupply/shared": "*",
+    "fastify": "^5.12.8",
+    "jose": "^6.2.18",
+    "nodemailer": "^10.6.0",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/nodemailer": "^8.0.2",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "pino-pretty": "^13.2.0"
+  }
+}

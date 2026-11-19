@@ -1,0 +1,54 @@
+{
+  "name": "instasupply",
+  "version": "1.0.0",
+  "private": true,
+  "description": "InstaSupply — construction-supply marketplace for the Greater Toronto Area: API and PostgreSQL backend, web console for ops and suppliers, and the customer and driver apps.",
+  "workspaces": [
+    "backend",
+    "frontend",
+    "app/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm --workspace @instasupply/backend run dev",
+    "dev:frontend": "npm --workspace @instasupply/frontend run dev",
+    "dev:customer": "npm --workspace @instasupply/customer run start",
+    "dev:customer:web": "npm --workspace @instasupply/customer run web",
+    "dev:driver": "npm --workspace @instasupply/driver run start",
+    "dev:driver:web": "npm --workspace @instasupply/driver run web",
+    "build:backend": "npm --workspace @instasupply/backend run build",
+    "build:frontend": "npm --workspace @instasupply/frontend run build",
+    "test:backend": "npm --workspace @instasupply/backend run test",
+    "db": "npm --workspace @instasupply/backend run db --",
+    "railway:plan": "railway config plan",
+    "railway:apply": "railway config apply",
+    "deploy:backend": "railway up --service backend",
+    "deploy:frontend": "railway up --service frontend",
+    "smoke": "node scripts/smoke.mjs",
+    "typecheck": "npm --workspace @instasupply/shared run typecheck && npm --workspace @instasupply/art run typecheck && npm --workspace @instasupply/backend run typecheck && npm --workspace @instasupply/frontend run typecheck && npm --workspace @instasupply/customer run typecheck && npm --workspace @instasupply/driver run typecheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:legacy": "node scripts/check-legacy.mjs",
+    "test": "npm --workspace @instasupply/shared run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
+    "railway": "3.17.0",
+    "tsx": "^4.20.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.73.0"
+  },
+  "overrides": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

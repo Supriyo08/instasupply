@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "demo-instasupply",
+    "staging": "instasupply-staging",
+    "prod": "instasupply-prod"
+  }
+}

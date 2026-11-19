@@ -1,0 +1,83 @@
+name: CI
+
+# Runs on every pull request. It is also the first stage of every deploy: deploy.yml calls this file and
+# will not ship unless both jobs pass. That is why there is no `push` trigger here. A push to main, a
+# release tag or a manual deploy already runs these checks once, as the "Verify" stage of the Deploy
+# workflow, on exactly the commit being shipped. A `push` trigger would run the whole suite a second time.
+on:
+  pull_request:
+  workflow_call:
+
+# A newer push to a pull request replaces the run for the older push. A run started by deploy.yml gets a
+# group of its own instead (inside a called workflow `github` describes the caller, so there is no pull
+# request number), which means verifying a release is never cancelled and never waits behind another run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint · typecheck · unit tests · builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # Dependencies' install scripts are not run. Nothing in package-lock.json needs one to build, test
+      # or deploy, and an install script is the first place a hijacked package runs its code. The deploy
+      # and app-build jobs install the same way, so a new dependency that does need its script fails
+      # here, on the pull request that adds it. Give it an explicit `npm rebuild <package>` step then.
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      # The deploy job trusts these two scripts to stop a bad deploy, and nothing else exercises them.
+      - name: Check the deploy helper scripts
+        run: |
+          shellcheck --severity=warning .github/scripts/*.sh
+          bash .github/scripts/selftest.sh
+      - run: npm run build:functions
+      - name: Build back office
+        run: npm run build:backoffice
+        env:
+          VITE_FIREBASE_PROJECT_ID: demo-instasupply
+      - name: Bundle driver app (catches Metro resolution errors)
+        working-directory: apps/driver
+        run: npx expo export --platform android --platform ios --output-dir "$RUNNER_TEMP/driver-export"
+      - name: Bundle shopping app (iOS, Android and web)
+        working-directory: apps/customer
+        run: npx expo export --platform android --platform ios --platform web --output-dir "$RUNNER_TEMP/customer-export"
+
+  integration:
+    name: Backend integration & security rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ hashFiles('package-lock.json') }}
+      - run: npm ci --ignore-scripts
+      # Starts throwaway emulators, runs the callable/trigger workflow tests and the
+      # Firestore + Storage security-rules tests, then shuts everything down.
+      - run: npm run test:integration

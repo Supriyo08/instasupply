@@ -1,0 +1,19 @@
+{
+  "name": "@instasupply/expo-firebase",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Firebase client setup, realtime hooks, typed callables and helpers shared by the Expo apps.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "peerDependencies": {
+    "@react-native-async-storage/async-storage": "*",
+    "expo-constants": "*",
+    "firebase": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}
