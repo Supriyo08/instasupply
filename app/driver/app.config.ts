@@ -2,16 +2,24 @@ import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 /**
  * APP_VARIANT lets development, preview and production builds live side by side on one device.
- * Secrets never go here: everything below is either public or injected by EAS at build time.
+ * Secrets never go here: everything below is either public or injected at build time (docs/CLIENTS.md §8.2).
  */
 const variant = process.env.APP_VARIANT ?? 'production';
 const isProduction = variant === 'production';
 const suffix = isProduction ? '' : `.${variant}`;
 
-// Path to google-services.json (enables native FCM on Android). On EAS, use a file environment variable.
-const googleServicesFile = process.env.GOOGLE_SERVICES_JSON || undefined;
+// A release bundle that cannot reach the API must fail at build time, not on a driver's phone.
+// Release bundling runs in production mode with .env.production loaded; `expo start` does not.
+const apiUrl = (process.env.EXPO_PUBLIC_API_URL ?? '').trim();
+if (process.env.NODE_ENV === 'production' && !/^https:\/\/[^/\s]+$/.test(apiUrl)) {
+  throw new Error(
+    `EXPO_PUBLIC_API_URL must be an https:// origin without a path for a release bundle (got "${apiUrl}"). See docs/CLIENTS.md §8.2.`,
+  );
+}
 
-const easProjectId = process.env.EAS_PROJECT_ID;
+// Path to google-services.json: FCM transport for Expo push on Android (docs/CLIENTS.md §6.1).
+const googleServicesFile = process.env.GOOGLE_SERVICES_JSON || undefined;
+const easProjectId = process.env.EAS_PROJECT_ID || undefined;
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
@@ -39,9 +47,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       monochromeImage: './assets/android-icon-monochrome.png',
     },
     googleServicesFile,
-    config: process.env.GOOGLE_MAPS_ANDROID_API_KEY
-      ? { googleMaps: { apiKey: process.env.GOOGLE_MAPS_ANDROID_API_KEY } }
-      : undefined,
     predictiveBackGestureEnabled: false,
   },
   web: {
@@ -52,13 +57,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   plugins: [
     'expo-router',
     'expo-status-bar',
+    'expo-secure-store',
     [
       'expo-location',
       {
         locationAlwaysAndWhenInUsePermission:
-          'InstaSupply shares your location with dispatch while you are online, so customers can follow their delivery.',
+          'InstaSupply shares your location while you are online, so dispatch, stores and the site can see your truck approach.',
         locationWhenInUsePermission:
-          'InstaSupply uses your location to plan your route and share live tracking while you are online.',
+          'InstaSupply uses your location to show jobs near you, plan your route and share live tracking while you are online.',
         isIosBackgroundLocationEnabled: true,
         isAndroidBackgroundLocationEnabled: true,
         isAndroidForegroundServiceEnabled: true,
@@ -80,8 +86,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       'expo-image-picker',
       {
-        cameraPermission: 'Take a photo of the package as proof of delivery.',
-        photosPermission: 'Attach a photo of the package as proof of delivery.',
+        cameraPermission: 'Take the drop-off photo that proves where you left the load.',
+        photosPermission: 'Attach a drop-off photo that proves where you left the load.',
         microphonePermission: false,
       },
     ],
@@ -89,5 +95,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   extra: {
     eas: easProjectId ? { projectId: easProjectId } : undefined,
     variant,
+    // Whether this build can receive system push at all (docs/CLIENTS.md §6.1): read by push-availability.ts.
+    push: { android: Boolean(easProjectId && googleServicesFile), ios: Boolean(easProjectId) },
   },
 });

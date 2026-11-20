@@ -1,0 +1,48 @@
+# What `railway up` must NOT upload. Gitignore syntax.
+# The Railway CLI also applies .gitignore while this folder has a .git (it has one since 2026-11-20), but this
+# file is the filter that is relied on: it must exclude everything by itself. Keep it in step with .gitignore
+# so that nothing the build needs is dropped by a .gitignore pattern (for example a source folder named logs/).
+# Keep .dockerignore in step (same rules, Docker's syntax).
+
+# --- never leaves this machine -------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+*.p8
+*.p12
+*.pem
+*.mobileprovision
+credentials.json
+service-account*.json
+google-services.json
+GoogleService-Info.plist
+*.apk
+*.aab
+
+# --- not needed to build the backend or the frontend image ------------------------------------------------
+node_modules/
+# The Android build workspace holds a disk image of several gigabytes.
+/.build/
+/app/
+/legacy/
+/docs/
+/scripts/
+/.github/
+/.claude/
+/.railway/
+/README.md
+/backend/.data/
+/.pgdata/
+/packages/art/preview/
+/packages/expo-firebase/
+
+# --- build output and caches ------------------------------------------------------------------------------
+dist/
+web-build/
+coverage/
+.expo/
+*.tsbuildinfo
+*.log
+.DS_Store

@@ -1,36 +1,55 @@
-import { ACTIVE_STATUSES, startOfDay, type DeliveryStatus } from '@instasupply/shared';
+import {
+  ACTIVE_STATUSES,
+  addLocalDays,
+  formatRelativeTime,
+  localDateOf,
+  startOfLocalDay,
+  STORE_ORDER_META,
+  type DeliveryStatus,
+} from '@instasupply/shared';
 import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 
+import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
-import { EmptyState, ErrorState, PageSpinner } from '@/components/ui/Feedback';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { LoadMore } from '@/components/ui/Data';
+import { Callout, ErrorState, PageSpinner } from '@/components/ui/Feedback';
 import { Select, TextInput } from '@/components/ui/Form';
-import { PackageIcon, PlusIcon, SearchIcon, UploadIcon } from '@/components/ui/icons';
+import {
+  ChevronRightIcon,
+  FailedIcon,
+  InfoIcon,
+  PlusIcon,
+  SearchIcon,
+  UploadIcon,
+} from '@/components/ui/icons';
 import { PageHeader, Tabs, type TabItem } from '@/components/ui/Layout';
 import {
   mergeById,
+  useClosedToday,
   useDrivers,
+  useFailedStoreOrders,
   useNow,
   useOpenDeliveries,
   useRecentDeliveries,
+  useStartOfToday,
   type DeliveryRecord,
 } from '@/lib/data';
 
 import { AssignDialog } from './components/AssignDialog';
 import { DeliveriesTable } from './components/DeliveriesTable';
+import { SceneEmpty } from './components/SceneArt';
 import { CreateDeliveryModal } from './create/CreateDeliveryModal';
+import { KIND_LABEL } from './delivery-format';
 import { ImportCsvModal } from './import/ImportCsvModal';
 
 type Tab = 'all' | 'unassigned' | 'active' | 'delivered' | 'failed' | 'cancelled';
 type Range = 'today' | '7d' | '30d';
+type Kind = 'all' | 'marketplace' | 'manual';
 
-const DAY = 24 * 60 * 60 * 1000;
-const RANGE_START: Record<Range, () => number> = {
-  today: () => startOfDay(),
-  '7d': () => startOfDay() - 6 * DAY,
-  '30d': () => startOfDay() - 29 * DAY,
-};
+/** A non-paged list stops at this many rows (CLIENTS §4.1 `maxRows`); a full list says so (R47, R48). */
+const LIST_CAP = 2_000;
 
 const matchesTab = (status: DeliveryStatus, tab: Tab) => {
   if (tab === 'all') return true;
@@ -38,28 +57,44 @@ const matchesTab = (status: DeliveryStatus, tab: Tab) => {
   return status === tab;
 };
 
+const TABS: Tab[] = ['all', 'unassigned', 'active', 'delivered', 'failed', 'cancelled'];
+
 export default function DeliveriesPage() {
   const now = useNow();
   const [params, setParams] = useSearchParams();
-  const tab = (params.get('tab') as Tab | null) ?? 'all';
+  const tabParam = params.get('tab') as Tab | null;
+  const tab: Tab = tabParam && TABS.includes(tabParam) ? tabParam : 'all';
   const [range, setRange] = useState<Range>('7d');
+  const [kind, setKind] = useState<Kind>('all');
   const [search, setSearch] = useState('');
   const [driverFilter, setDriverFilter] = useState('');
   const [assigning, setAssigning] = useState<DeliveryRecord | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const createOpen = params.get('create') === '1';
 
-  const since = useMemo(() => RANGE_START[range](), [range]);
+  // Ranges are Toronto calendar days, whatever the dispatcher's computer is set to (MARKETPLACE §4.1).
+  const today = useStartOfToday();
+  const since = useMemo(() => {
+    if (range === 'today') return today;
+    return startOfLocalDay(addLocalDays(localDateOf(today), range === '7d' ? -6 : -29));
+  }, [range, today]);
   const open = useOpenDeliveries();
+  const closedToday = useClosedToday();
   const recent = useRecentDeliveries(since);
+  const failedOrders = useFailedStoreOrders();
   const drivers = useDrivers();
 
-  // Open work is always shown regardless of age; finished work is limited to the date range.
-  const all = useMemo(() => mergeById(open.data, recent.data), [open.data, recent.data]);
+  // Open work is always shown regardless of age; finished work is limited to the date range, plus
+  // everything that finished today.
+  const all = useMemo(
+    () => mergeById(open.data, closedToday.data, recent.data),
+    [closedToday.data, open.data, recent.data],
+  );
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return all
+      .filter((delivery) => (kind === 'all' ? true : delivery.kind === kind))
       .filter((delivery) => (driverFilter ? delivery.driverId === driverFilter : true))
       .filter((delivery) =>
         term
@@ -69,14 +104,15 @@ export default function DeliveriesPage() {
               delivery.customer.phone ?? '',
               delivery.address,
               delivery.driverName ?? '',
+              delivery.pickup?.storeName ?? '',
             ]
               .join(' ')
               .toLowerCase()
               .includes(term)
           : true,
       )
-      .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
-  }, [all, driverFilter, search]);
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }, [all, driverFilter, kind, search]);
 
   const counts = useMemo(() => {
     const result: Record<Tab, number> = {
@@ -88,14 +124,13 @@ export default function DeliveriesPage() {
       cancelled: 0,
     };
     for (const delivery of filtered) {
-      (Object.keys(result) as Tab[]).forEach((key) => {
-        if (matchesTab(delivery.status, key)) result[key] += 1;
-      });
+      for (const key of TABS) if (matchesTab(delivery.status, key)) result[key] += 1;
     }
     return result;
   }, [filtered]);
 
   const visible = filtered.filter((delivery) => matchesTab(delivery.status, tab));
+  const capped = open.data.length >= LIST_CAP || recent.data.length >= LIST_CAP;
 
   const tabs: TabItem<Tab>[] = [
     { value: 'all', label: 'All', count: counts.all },
@@ -113,14 +148,15 @@ export default function DeliveriesPage() {
     setParams(next, { replace: true });
   };
 
-  const loading = open.loading && recent.loading && all.length === 0;
-  const error = open.error ?? recent.error;
+  const loading = (open.loading || recent.loading) && all.length === 0;
+  const error = all.length === 0 ? (open.error ?? recent.error ?? closedToday.error) : null;
+  const filtering = !!search || !!driverFilter || kind !== 'all';
 
   return (
     <>
       <PageHeader
         title="Deliveries"
-        description="Create, assign and follow every order."
+        description="Every trip from the stores to the jobsites, and dispatch's own deliveries."
         actions={
           <>
             <Button variant="secondary" icon={UploadIcon} onClick={() => setImportOpen(true)}>
@@ -133,6 +169,10 @@ export default function DeliveriesPage() {
         }
       />
 
+      {tab === 'failed' || tab === 'all' ? (
+        <FailedStoreOrders failed={failedOrders} now={now} compact={tab === 'all'} />
+      ) : null}
+
       <Card>
         <div className="px-5 pt-2">
           <Tabs
@@ -142,7 +182,7 @@ export default function DeliveriesPage() {
             onChange={(value) => setParam('tab', value === 'all' ? null : value)}
           />
         </div>
-        <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-3 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-3 lg:flex-row lg:items-center">
           <div className="relative flex-1">
             <SearchIcon
               size={16}
@@ -152,14 +192,24 @@ export default function DeliveriesPage() {
             <TextInput
               aria-label="Search deliveries"
               className="pl-9"
-              placeholder="Search order, customer, phone, address or driver"
+              placeholder="Search order, site contact, phone, address, store or driver"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
           <Select
+            aria-label="Kind of delivery"
+            className="lg:w-40"
+            value={kind}
+            onChange={(event) => setKind(event.target.value as Kind)}
+          >
+            <option value="all">All kinds</option>
+            <option value="marketplace">{KIND_LABEL.marketplace}s</option>
+            <option value="manual">{KIND_LABEL.manual} deliveries</option>
+          </Select>
+          <Select
             aria-label="Filter by driver"
-            className="sm:w-48"
+            className="lg:w-48"
             value={driverFilter}
             onChange={(event) => setDriverFilter(event.target.value)}
           >
@@ -173,8 +223,8 @@ export default function DeliveriesPage() {
               ))}
           </Select>
           <Select
-            aria-label="Date range"
-            className="sm:w-40"
+            aria-label="Date range for finished deliveries"
+            className="lg:w-44"
             value={range}
             onChange={(event) => setRange(event.target.value as Range)}
           >
@@ -184,21 +234,36 @@ export default function DeliveriesPage() {
           </Select>
         </div>
 
+        {capped ? (
+          <div className="border-b border-slate-100 px-5 py-2">
+            <Callout tone="info" icon={InfoIcon}>
+              Showing the newest {LIST_CAP.toLocaleString('en-CA')} deliveries of a list; older ones are not
+              loaded. Narrow the date range, or open a delivery by its link.
+            </Callout>
+          </div>
+        ) : null}
+
         {error ? (
-          <ErrorState error={error} className="m-5" />
+          <ErrorState
+            error={error}
+            onRetry={() => (open.error ? open.retry() : recent.retry())}
+            className="m-5"
+          />
         ) : loading ? (
           <PageSpinner label="Loading deliveries" />
         ) : visible.length === 0 ? (
-          <EmptyState
-            icon={PackageIcon}
-            title={search || driverFilter ? 'No deliveries match your filters' : 'No deliveries here yet'}
+          <SceneEmpty
+            artKey="scene-jobsite-delivery"
+            title={filtering ? 'No deliveries match your filters' : 'Nothing here yet'}
             description={
-              search || driverFilter
+              filtering
                 ? 'Try a different search or clear the filters.'
-                : 'Create a delivery or import a CSV to get started.'
+                : tab === 'all'
+                  ? 'Store orders appear here once they are placed. Create a manual delivery or import a CSV for dispatch trips.'
+                  : 'No deliveries in this tab for the selected dates.'
             }
             action={
-              !search && !driverFilter ? (
+              !filtering && tab === 'all' ? (
                 <Button icon={PlusIcon} onClick={() => setParam('create', '1')}>
                   New delivery
                 </Button>
@@ -214,5 +279,85 @@ export default function DeliveriesPage() {
       <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} />
       <AssignDialog delivery={assigning} open={!!assigning} onClose={() => setAssigning(null)} />
     </>
+  );
+}
+
+/**
+ * Store orders whose delivery failed: they wait for a re-attempt or a return to the store, with no date
+ * bound, so an order created weeks ago that failed yesterday is still on screen (R54).
+ */
+function FailedStoreOrders({
+  failed,
+  now,
+  compact,
+}: {
+  failed: ReturnType<typeof useFailedStoreOrders>;
+  now: number;
+  compact: boolean;
+}) {
+  if (failed.items.length === 0) {
+    if (compact || failed.loading) return null;
+    if (failed.error) {
+      return (
+        <ErrorState
+          error={failed.error}
+          onRetry={failed.retry}
+          title="Couldn't load failed store orders"
+          className="mb-4"
+        />
+      );
+    }
+    return null;
+  }
+  return (
+    <Card className="mb-4 border-rose-200">
+      <CardHeader
+        title={
+          <span className="inline-flex items-center gap-2 text-rose-700">
+            <FailedIcon size={16} aria-hidden /> Failed store orders waiting for a decision
+          </span>
+        }
+        description="Re-attempt the delivery or return the load to the store from the delivery page."
+        action={
+          <Badge tone="danger">
+            {failed.items.length}
+            {failed.hasMore ? '+' : ''}
+          </Badge>
+        }
+      />
+      <ul className="divide-y divide-slate-100">
+        {(compact ? failed.items.slice(0, 3) : failed.items).map((order) => (
+          <li key={order.id}>
+            <Link
+              to={order.deliveryId ? `/deliveries/${order.deliveryId}` : `/orders/${order.orderId}`}
+              className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-slate-900">
+                  <span className="font-mono">{order.number}</span> · {order.storeName}
+                </span>
+                <span className="block truncate text-xs text-slate-500">
+                  {order.companyName ?? order.customerName} · {order.jobsite?.areaLabel ?? 'Jobsite'} ·{' '}
+                  {STORE_ORDER_META.failed.label.toLowerCase()}{' '}
+                  {formatRelativeTime(order.statusAt.failed ?? order.updatedAt, now)}
+                </span>
+              </span>
+              <ChevronRightIcon size={16} className="shrink-0 text-slate-300" aria-hidden />
+            </Link>
+          </li>
+        ))}
+      </ul>
+      {compact && failed.items.length > 3 ? (
+        <Link
+          to="/deliveries?tab=failed"
+          className="block border-t border-slate-100 px-5 py-2.5 text-xs font-semibold text-brand-600 hover:text-brand-700"
+        >
+          See all failed store orders
+        </Link>
+      ) : null}
+      {!compact ? (
+        <LoadMore hasMore={failed.hasMore} loadingMore={failed.loadingMore} onLoadMore={failed.loadMore} />
+      ) : null}
+    </Card>
   );
 }

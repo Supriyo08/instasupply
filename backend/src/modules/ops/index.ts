@@ -1,11 +1,13 @@
 /**
- * WAVE-2 PLACEHOLDER written by the platform workstream (docs/PLATFORM.md §15 rule 1). The owner is `money-comms`
- * (§15.2), who replaces the bodies; the exported names and signatures are the frozen ones of §9.1, so other
- * modules compile against them today. Its commands answer internal "not implemented" until the owner registers them with defineCommand.
+ * The ops module (docs/PLATFORM.md §2.1, §15.2 `money-comms`): dashboard, store statistics, job state, the dev
+ * outbox and the transactional outbox (§5.3.10).
  */
 import type { FastifyInstance } from 'fastify';
 import type { Deps } from '../../container';
+import { registerOpsRoutes } from './routes';
 
-export function register(_app: FastifyInstance, _deps: Deps): void {
-  // No commands yet: the owner adds routes, commands, handlers and jobs here.
+export { buildDashboard } from './dashboard';
+
+export function register(app: FastifyInstance, _deps: Deps): void {
+  registerOpsRoutes(app);
 }

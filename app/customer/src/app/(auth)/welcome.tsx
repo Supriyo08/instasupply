@@ -5,7 +5,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Wordmark } from '@/components/brand/Wordmark';
 import { Button, Text } from '@/components/ui';
 import { AuthScaffold } from '@/features/session/components/AuthScaffold';
-import { AuthSwitch } from '@/features/session/components/AuthSwitch';
 import { spacing } from '@/theme/tokens';
 
 /** Room above the art for the wordmark. */
@@ -14,6 +13,8 @@ const WORDMARK_SPACE = 56;
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const openLogin = () => router.push('/login');
+  // Guests shop without an account; sign-in comes back when they check out (MARKETPLACE §7.2).
+  const browse = () => (router.canGoBack() ? router.back() : router.replace('/'));
 
   return (
     <AuthScaffold
@@ -37,8 +38,8 @@ export default function WelcomeScreen() {
       <View style={styles.actions}>
         <Button variant="secondary" icon="log-in" label="Login" onPress={openLogin} />
         <Button icon="user-plus" label="Create an account" onPress={() => router.push('/signup')} />
+        <Button variant="ghost" icon="search" label="Browse first" onPress={browse} />
       </View>
-      <AuthSwitch prompt="Already have an account?" action="Login" onPress={openLogin} />
     </AuthScaffold>
   );
 }

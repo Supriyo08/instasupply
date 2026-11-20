@@ -22,7 +22,8 @@ describe('refresh with rotation and reuse detection (§6.3.5)', () => {
   });
   after(() => ctx.close());
 
-  const refresh = (token: string) => post<SessionBody & ErrorBody>(ctx, '/auth/refresh', { refreshToken: token });
+  const refresh = (token: string) =>
+    post<SessionBody & ErrorBody>(ctx, '/auth/refresh', { refreshToken: token });
 
   test('rotation answers a new pair and me; the access token works', async () => {
     const first = await registerAccount(ctx, { email: 'rot@example.com' });
@@ -55,7 +56,9 @@ describe('refresh with rotation and reuse detection (§6.3.5)', () => {
     const replay = await refresh(first.refreshToken);
     assert.equal(replay.status, 401);
     assert.equal(replay.body.error.details.reason, 'refresh_reused');
-    const { rows } = await ctx.pool.query('SELECT revoked_reason FROM sessions WHERE id = $1', [first.sessionId]);
+    const { rows } = await ctx.pool.query('SELECT revoked_reason FROM sessions WHERE id = $1', [
+      first.sessionId,
+    ]);
     assert.equal(rows[0]!.revoked_reason, 'reuse_detected');
     // The thief and the owner both have to sign in again.
     const after = await refresh(grandchild.body.refreshToken);
@@ -93,9 +96,10 @@ describe('refresh with rotation and reuse detection (§6.3.5)', () => {
 
   test('the sliding lifetime never passes the session end', async () => {
     const first = await registerAccount(ctx, { email: 'slide@example.com' });
-    const { rows } = await ctx.pool.query<{ expires_at: number }>('SELECT expires_at FROM sessions WHERE id = $1', [
-      first.sessionId,
-    ]);
+    const { rows } = await ctx.pool.query<{ expires_at: number }>(
+      'SELECT expires_at FROM sessions WHERE id = $1',
+      [first.sessionId],
+    );
     let token = first.refreshToken;
     for (let i = 0; i < 3; i += 1) {
       ctx.clock.advance(50 * DAY);
@@ -145,30 +149,47 @@ describe('log out and revocation clean-up (§6.3.6)', () => {
 
   const state = async (uid: string) => {
     const devices = await ctx.pool.query('SELECT 1 FROM devices WHERE user_id = $1', [uid]);
-    const location = await ctx.pool.query<{ online: boolean }>('SELECT online FROM driver_locations WHERE driver_id = $1', [
-      uid,
-    ]);
+    const location = await ctx.pool.query<{ online: boolean }>(
+      'SELECT online FROM driver_locations WHERE driver_id = $1',
+      [uid],
+    );
     return { devices: devices.rowCount, online: location.rows[0]?.online };
   };
 
   test('logout needs no access token, takes the driver offline and deletes the device', async () => {
     const session = await driverWithDevice('d1@example.com');
-    const answer = await call(ctx, { method: 'POST', url: '/api/v1/auth/logout', payload: { refreshToken: session.refreshToken } });
+    const answer = await call(ctx, {
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      payload: { refreshToken: session.refreshToken },
+    });
     assert.equal(answer.status, 204);
     assert.deepEqual(await state(session.me.account.uid), { devices: 0, online: false });
     const me = await get<ErrorBody>(ctx, '/me', session.accessToken);
     assert.equal(me.body.error.details.reason, 'session_revoked');
     // Unknown or already revoked: still 204.
-    const again = await call(ctx, { method: 'POST', url: '/api/v1/auth/logout', payload: { refreshToken: session.refreshToken } });
+    const again = await call(ctx, {
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      payload: { refreshToken: session.refreshToken },
+    });
     assert.equal(again.status, 204);
-    const junk = await call(ctx, { method: 'POST', url: '/api/v1/auth/logout', payload: { refreshToken: 'junk' } });
+    const junk = await call(ctx, {
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      payload: { refreshToken: 'junk' },
+    });
     assert.equal(junk.status, 204);
   });
 
   test('logout-all revokes every session of the caller', async () => {
     const first = await driverWithDevice('d2@example.com');
     const second = await loginAccount(ctx, { email: 'd2@example.com', app: 'driver' });
-    const answer = await call(ctx, { method: 'POST', url: '/api/v1/auth/logout-all', token: second.body.accessToken });
+    const answer = await call(ctx, {
+      method: 'POST',
+      url: '/api/v1/auth/logout-all',
+      token: second.body.accessToken,
+    });
     assert.equal(answer.status, 204);
     assert.equal((await get<ErrorBody>(ctx, '/me', first.accessToken)).status, 401);
     assert.equal((await get<ErrorBody>(ctx, '/me', second.body.accessToken)).status, 401);
@@ -191,17 +212,30 @@ describe('log out and revocation clean-up (§6.3.6)', () => {
     });
     assert.equal(answer.status, 204);
     assert.deepEqual(await state(driver.me.account.uid), { devices: 0, online: false });
-    const { rows } = await ctx.pool.query('SELECT revoked_reason FROM sessions WHERE user_id = $1', [driver.me.account.uid]);
-    assert.deepEqual(rows.map((r) => r.revoked_reason), ['admin']);
+    const { rows } = await ctx.pool.query('SELECT revoked_reason FROM sessions WHERE user_id = $1', [
+      driver.me.account.uid,
+    ]);
+    assert.deepEqual(
+      rows.map((r) => r.revoked_reason),
+      ['admin'],
+    );
   });
 
   test('GET /auth/sessions lists the active sessions and marks the current one; DELETE revokes one', async () => {
     const a = await registerAccount(ctx, { email: 'multi@example.com', installationId: 'multi-install-a' });
     const b = await loginAccount(ctx, { email: 'multi@example.com', installationId: 'multi-install-b' });
-    const list = await get<{ items: { id: string; current: boolean }[] }>(ctx, '/auth/sessions', a.accessToken);
+    const list = await get<{ items: { id: string; current: boolean }[] }>(
+      ctx,
+      '/auth/sessions',
+      a.accessToken,
+    );
     assert.equal(list.body.items.length, 2);
     assert.equal(list.body.items.find((s) => s.current)?.id, a.sessionId);
-    const removed = await call(ctx, { method: 'DELETE', url: `/api/v1/auth/sessions/${b.body.sessionId}`, token: a.accessToken });
+    const removed = await call(ctx, {
+      method: 'DELETE',
+      url: `/api/v1/auth/sessions/${b.body.sessionId}`,
+      token: a.accessToken,
+    });
     assert.equal(removed.status, 204);
     assert.equal((await get(ctx, '/me', b.body.accessToken)).status, 401);
   });

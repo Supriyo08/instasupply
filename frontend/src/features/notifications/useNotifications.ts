@@ -1,57 +1,50 @@
-import { COLLECTIONS, type AppNotification } from '@instasupply/shared';
-import {
-  collection,
-  doc,
-  limit,
-  orderBy,
-  query,
-  serverTimestamp,
-  updateDoc,
-  where,
-  writeBatch,
-} from 'firebase/firestore';
+import { useApiMutation, useLiveQuery } from '@instasupply/api-client/react';
+import type { AppNotification } from '@instasupply/shared';
 import { useCallback, useMemo } from 'react';
 
-import { db } from '@/lib/firebase/app';
-import { useCollection } from '@/lib/firebase/hooks';
+import { queries } from '@/lib/api';
 
-export function useNotifications(uid: string | null | undefined, count = 30) {
-  const q = useMemo(
-    () =>
-      uid
-        ? query(
-            collection(db, COLLECTIONS.notifications),
-            where('userId', '==', uid),
-            orderBy('createdAt', 'desc'),
-            limit(count),
-          )
-        : null,
-    [count, uid],
+/**
+ * The signed-in user's inbox (newest 50), live over `user:{uid}:notifications`. "Mark read" and
+ * "Mark all read" are optimistic (CLIENTS §1.12): the dot disappears at once and comes back only if
+ * the server refuses.
+ */
+export function useNotifications(uid: string | null | undefined) {
+  const query = queries.notifications(uid);
+  const state = useLiveQuery(query);
+  const key = query.key;
+
+  const markReadMutation = useApiMutation((api, id: string) => api.notifications.markRead(id), {
+    optimistic: (cache, id) =>
+      cache.patch<AppNotification[]>(key, (list) =>
+        list.map((item) => (item.id === id ? { ...item, read: true } : item)),
+      ),
+  });
+  const markAllMutation = useApiMutation((api) => api.notifications.markAllRead(), {
+    optimistic: (cache) =>
+      cache.patch<AppNotification[]>(key, (list) => list.map((item) => ({ ...item, read: true }))),
+  });
+
+  const { run: runMarkRead } = markReadMutation;
+  const { run: runMarkAll } = markAllMutation;
+  // Failures roll the optimistic patch back; nothing else to tell the user for a read flag.
+  const markRead = useCallback(
+    (id: string) =>
+      runMarkRead(id).then(
+        () => undefined,
+        () => undefined,
+      ),
+    [runMarkRead],
   );
-  const state = useCollection<AppNotification>(q);
-  const unread = state.data.filter((item) => !item.read);
+  const markAllRead = useCallback(
+    () =>
+      runMarkAll().then(
+        () => undefined,
+        () => undefined,
+      ),
+    [runMarkAll],
+  );
 
-  const markRead = useCallback(async (id: string) => {
-    await updateDoc(doc(db, COLLECTIONS.notifications, id), { read: true, readAt: serverTimestamp() });
-  }, []);
-
-  const markAllRead = useCallback(async () => {
-    const batch = writeBatch(db);
-    unread.forEach((item) =>
-      batch.update(doc(db, COLLECTIONS.notifications, item.id), { read: true, readAt: serverTimestamp() }),
-    );
-    await batch.commit();
-  }, [unread]);
-
-  return { ...state, unreadCount: unread.length, markRead, markAllRead };
-}
-
-/** Where a notification should take the user when clicked. */
-export function notificationLink(notification: Pick<AppNotification, 'data'>): string | null {
-  const { threadId, deliveryId, driverId, customerOrderId } = notification.data ?? {};
-  if (threadId) return `/messages/${threadId}`;
-  if (customerOrderId) return `/orders/${customerOrderId}`;
-  if (deliveryId) return `/deliveries/${deliveryId}`;
-  if (driverId) return `/drivers/${driverId}`;
-  return null;
+  const unreadCount = useMemo(() => state.data.filter((item) => !item.read).length, [state.data]);
+  return { ...state, unreadCount, markRead, markAllRead };
 }

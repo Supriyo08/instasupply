@@ -1,7 +1,7 @@
-import type { Product } from '@instasupply/shared';
+import { CATEGORIES, CATEGORY_IDS } from '@instasupply/shared';
 import { Platform } from 'react-native';
 
-import { colors, productBackdrops } from '@/theme/tokens';
+import { colors } from '@/theme/tokens';
 
 /** Height of the shared <Header /> below the status bar (6 + 40px button + 10). */
 export const HEADER_BAR_HEIGHT = 56;
@@ -9,22 +9,12 @@ export const HEADER_BAR_HEIGHT = 56;
 /** Native-driven animations are not available on web. */
 export const NATIVE_DRIVER = Platform.OS !== 'web';
 
-/** At or below this stock a product shows an "only n left" hint. */
-export const LOW_STOCK = 10;
+/** The bulk chips next to the quantity stepper (MARKETPLACE §7.3 product row). */
+export const BULK_STEPS = [10, 25, 50] as const;
 
-/** Pastel colour placed behind a product's art (same palette as ProductCard). */
-export function backdropFor(categoryId: string | null | undefined): string {
-  return (categoryId ? productBackdrops[categoryId] : undefined) ?? colors.primaryTint;
-}
+const AVATAR_TINTS = CATEGORY_IDS.map((id) => CATEGORIES[id].tint);
 
-/** Orderable right now (listed and in stock). */
-export function isAvailable(product: Pick<Product, 'active' | 'stock'>): boolean {
-  return product.active && product.stock > 0;
-}
-
-const AVATAR_TINTS = Object.values(productBackdrops);
-
-/** A stable pastel for someone's initials avatar. */
+/** A stable pastel for someone's initials avatar (review authors). */
 export function avatarTint(seed: string): string {
   let hash = 0;
   for (let index = 0; index < seed.length; index += 1) hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;

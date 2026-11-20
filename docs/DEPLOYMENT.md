@@ -8,8 +8,11 @@ Companion documents: `docs/PLATFORM.md` (the API server and the database) and `d
 console, the apps and `packages/api-client`). `docs/MARKETPLACE.md` stays the specification of the domain.
 
 **Status.** Written on 2026-11-19 from the platform documentation, the Railway CLI source and the packages
-installed in this repository. Nothing was built, deployed or created on Railway while writing it. A separate
-trial of the Android build ran on this machine at the same time; §6.12 says what it had shown.
+installed in this repository. On 2026-11-20 the infra workstream wrote the files of §2 and §5 and checked them
+on this machine against the real backend (§2.8): both images build, the API image migrates and serves against
+the local PostgreSQL 17, and the smoke test passes except for the one endpoint whose module is not written
+yet. Nothing was deployed or created on Railway. A separate trial of the Android build ran on this machine at
+the same time; §6.12 says what it had shown.
 [Appendix A](#appendix-a-what-was-verified-and-where) lists every platform fact that was checked and where;
 [Appendix B](#appendix-b-what-was-not-verified) lists what was not and must be confirmed on the first run.
 
@@ -36,10 +39,12 @@ Two facts shape everything below. Read them before anything else.
    The replacement is one file for the whole project, `.railway/railway.ts` ("Infrastructure as Code"),
    which the Railway CLI evaluates on this machine and applies with `railway config apply`. This repository
    therefore has **one** Railway config file, not one per service (§2.2).
-2. **`railway up` does not honour `.gitignore` here.** The CLI only applies `.gitignore` inside a git
-   repository, and this folder is not one. Without `.railwayignore`, `railway up` would upload every file
-   that is not under `node_modules` or `.git`, including `.env` files and keystores. `.railwayignore`
-   (§2.6) must therefore exclude everything by itself.
+2. **`.railwayignore` must exclude everything by itself.** The CLI only applies `.gitignore` inside a git
+   repository. This folder was not one when this document was written; on 2026-11-20 a `.git` folder with a
+   first commit appeared, so today the CLI applies `.gitignore` as well. Do not rely on that: a copy of the
+   folder without `.git` (a backup, a fresh checkout without history) would upload every file that is not
+   under `node_modules` or `.git`, including `.env` files and keystores. `.railwayignore` (§2.6) is written to
+   be the only filter.
 
 ---
 
@@ -342,9 +347,9 @@ export default defineRailway(() => {
       // Only used once the service deploys from GitHub: `railway up` always builds.
       watchPatterns: ['/backend/**', '/packages/shared/**', '/package.json', '/package-lock.json'],
     },
+    domains: API_CUSTOM_DOMAINS.map((domain) => ({ domain, port: 8080 })),
     // Runs in a separate container of the new image, before the new version starts. A failure stops the
     // deployment and the previous version keeps serving.
-    domains: API_CUSTOM_DOMAINS.map((domain) => ({ domain, port: 8080 })),
     preDeploy: 'node dist/cli.js migrate',
     healthcheck: '/api/v1/health',
     healthcheckTimeout: 120,
@@ -534,6 +539,9 @@ RUN npm ci --ignore-scripts --omit=dev --workspace @instasupply/backend \
 # ---- runtime ----------------------------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production
+# Stack traces in the logs point at src/ files, not at lines of the bundle; this also covers the pre-deploy
+# `node dist/cli.js migrate`, which runs in the same image.
+ENV NODE_OPTIONS=--enable-source-maps
 WORKDIR /app/backend
 COPY --from=prod-deps /repo/node_modules /app/node_modules
 COPY --from=prod-deps /repo/backend/node_modules /app/backend/node_modules
@@ -559,12 +567,21 @@ Notes:
   `.railway/railway.ts`.
 - Do not attach a volume to `backend`. Volumes are mounted as root (the image runs as `node`), are not
   mounted during the pre-deploy command, and a service with a volume cannot have two replicas.
+- Measured on 2026-11-20 (§2.8): `npm ci` installs 301 packages in the build stage and 116 in `prod-deps`,
+  the bundles are `dist/server.js` 208.5 kB and `dist/cli.js` 106.3 kB, and the image is 409 MB on disk
+  (85.7 MB compressed). The process runs as `uid=1000(node)`.
 
 ### 2.4 `frontend/Dockerfile`
 
 The console is a static build. Railway passes the service variable `VITE_API_URL` to the build as a build
 argument (a Dockerfile only sees variables it declares with `ARG`), Vite writes it into the bundle, and the
 result is served by Caddy from an Alpine image of about 60 MB that runs as an unprivileged user.
+
+`--build-arg CONSOLE_PLACEHOLDER=true` replaces the Vite build with a one-page stand-in of the same shape
+(`index.html` with `#root`, one `/assets/*.js` file). It was added because the console does not compile yet
+(the console workstream is still replacing Firebase), and the image, the Caddyfile and the smoke test still
+had to be checked. Railway never sets it, so a production build is always the real console. Remove the
+argument once the console builds.
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -575,6 +592,10 @@ result is served by Caddy from an Alpine image of about 60 MB that runs as an un
 #     --tag instasupply-frontend .
 #
 # The API address is baked into the bundle at build time. A different API address needs a new build.
+#
+# --build-arg CONSOLE_PLACEHOLDER=true replaces the Vite build with a one-page stand-in that has the same
+# shape (index.html with #root, one fingerprinted /assets/*.js). It exists so that the image, the Caddyfile
+# and the smoke test can be checked while the console does not compile yet; Railway never sets it.
 
 ARG NODE_IMAGE=node:22-bookworm-slim
 ARG CADDY_IMAGE=caddy:2.11-alpine
@@ -606,10 +627,20 @@ RUN case "${VITE_API_URL}" in \
     esac
 ENV VITE_API_URL=${VITE_API_URL}
 
-# 1. regenerate the artwork module from packages/art/svg, 2. type-check and build the console,
-# 3. keep source maps out of the public image, 4. record what this build points at (read by the smoke test).
-RUN npm run build --workspace @instasupply/art \
- && npm run build --workspace @instasupply/frontend \
+# 1. regenerate the artwork module from packages/art/svg, 2. type-check and build the console (or write the
+# stand-in), 3. keep source maps out of the public image, 4. record what this build points at (read by the
+# smoke test).
+ARG CONSOLE_PLACEHOLDER=false
+RUN if [ "${CONSOLE_PLACEHOLDER}" = "true" ]; then \
+      mkdir -p frontend/dist/assets \
+      && printf 'document.getElementById("root").textContent = "InstaSupply console placeholder";\n' \
+           > frontend/dist/assets/placeholder-00000000.js \
+      && printf '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>InstaSupply</title>%s</head><body><div id="root"></div></body></html>\n' \
+           '<script type="module" src="/assets/placeholder-00000000.js"></script>' > frontend/dist/index.html; \
+    else \
+      npm run build --workspace @instasupply/art \
+      && npm run build --workspace @instasupply/frontend; \
+    fi \
  && find frontend/dist -name '*.map' -delete \
  && printf '{"apiUrl":"%s","builtAt":"%s"}\n' "${VITE_API_URL}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       > frontend/dist/build-info.json
@@ -703,8 +734,8 @@ Dockerfile is then built with that archive as its build context. What the CLI le
 
 - `node_modules` and `.git` directories, always;
 - everything matched by `.railwayignore` (gitignore syntax), always;
-- everything matched by `.gitignore`, **only inside a git repository**. This folder is not one, so today
-  `.gitignore` is ignored;
+- everything matched by `.gitignore`, **only inside a git repository**. This folder became one on
+  2026-11-20 (see fact 2 at the top), but `.railwayignore` does not count on it;
 - nothing else: hidden files are uploaded, and symbolic links are followed.
 
 `.railwayignore` therefore lists everything itself. Both services upload the same archive (about 2 MB); each
@@ -712,7 +743,9 @@ Dockerfile copies only what it needs.
 
 ```gitignore
 # What `railway up` must NOT upload. Gitignore syntax.
-# This folder is not a git repository, so the Railway CLI does not apply .gitignore: this file is the only filter.
+# The Railway CLI also applies .gitignore while this folder has a .git (it has one since 2026-11-20), but this
+# file is the filter that is relied on: it must exclude everything by itself. Keep it in step with .gitignore
+# so that nothing the build needs is dropped by a .gitignore pattern (for example a source folder named logs/).
 # Keep .dockerignore in step (same rules, Docker's syntax).
 
 # --- never leaves this machine -------------------------------------------------------------------------
@@ -759,7 +792,8 @@ coverage/
 .DS_Store
 ```
 
-`.dockerignore` carries the same rules for `docker build` on a laptop and in CI, where `node_modules`
+`.dockerignore` carries the same rules for `docker build` on a laptop and in CI, plus `.git` (the Railway
+CLI always leaves `.git` out of its upload; Docker has to be told), where `node_modules`
 (1.2 GB) and `.build/` would otherwise be sent to the Docker daemon. It is **not** a copy: Docker's syntax
 differs from git's. A pattern without `**/` in front only matches at the root of the build context, so
 `node_modules` alone would leave `packages/shared/node_modules` in.
@@ -788,6 +822,8 @@ differs from git's. A pattern without `**/` in front only matches at the root of
 
 # --- not needed to build the backend or the frontend image ------------------------------------------------
 **/node_modules
+# The Railway CLI always leaves .git out of its upload; docker build has to be told.
+.git
 .build
 app
 legacy
@@ -851,6 +887,25 @@ The SDK is pinned on purpose. Its `postgres()` helper carries a default image (`
 propose a different PostgreSQL major. `firebase-tools` and `@firebase/rules-unit-testing` leave the root
 `devDependencies` with the rest of Firebase.
 
+### 2.8 Checked locally on 2026-11-20
+
+Run on this machine against the backend as the platform workstream delivered it, with Docker Desktop started
+for the occasion (`open -a Docker`, then `docker info` answers within seconds) and stopped afterwards. The
+local PostgreSQL 17 is reached from a container as `host.docker.internal:5432` (its `pg_hba.conf` trusts
+`127.0.0.1`, which is where Docker Desktop's connections arrive), with the CI variables of §7.3.
+
+| Check | Result |
+| --- | --- |
+| `docker build --file backend/Dockerfile --tag instasupply-backend:local .` | Builds; the bundle step prints `dist/server.js 208.5kb`, `dist/cli.js 106.3kb` |
+| `docker run … node dist/cli.js migrate` (production mode, empty database) | `applied 0001_init.sql`, `migrations: 1 applied; categories inserted: 25`, exit 0; a second run `nothing pending; categories inserted: 0`, exit 0 |
+| `docker run … instasupply-backend:local` | `Server listening at http://[::]:4000`, JSON log lines with `level` and `message`; `GET /api/v1/health` → `{"status":"ok",…}`; `id` → `uid=1000(node)` |
+| `docker stop` (SIGTERM) | `shutting down`, `stopped`, exit code 0 |
+| `docker build --file frontend/Dockerfile --build-arg VITE_API_URL=https://api.example.invalid --build-arg CONSOLE_PLACEHOLDER=true …` | Builds; `caddy validate` prints `Valid configuration`; image 77.6 MB; runs as `uid=10001(web)`; `/healthz` → `200 ok` with every header of §2.5; `/build-info.json` → `{"apiUrl":"https://api.example.invalid",…}` |
+| The same without `CONSOLE_PLACEHOLDER` | Fails in `tsc` with the console's own type errors (console workstream, not the image) |
+| `node scripts/smoke.mjs` against both containers (`EXPECT_API_URL=https://api.example.invalid`, `SMOKE_CORS_ORIGIN=https://console.example.invalid`, `EXPECT_PAYMENTS_MODE=test`, `EXPECT_PHONE_VERIFICATION=optional`) | On 2026-11-19, before the catalogue module existed: 12 of 13 lines `ok` and `FAIL API reference data (/api/v1/categories): status 404`. `GET /api/v1/categories` is now served (`modules/stores`), and a run against a local build passes every check, check 4 included (`(25 items)`), with no `SMOKE_SKIP` |
+| `node scripts/smoke.mjs` against `node dist/server.js` started outside Docker in development mode (`API_URL=http://localhost:4000 SMOKE_CORS_ORIGIN=http://localhost:5173`) | Every API check `ok`, check 4 included (`All checks passed.`, exit 0) |
+| `.railway/railway.ts` | Type-checks with `tsc --strict` against `railway@3.17.0` (including `domains`); evaluated with `node --experimental-strip-types` and the SDK's `createRailwayContext` and `project` it yields the four resources with the settings and variables of §2.2. Not run through `railway config plan`: that needs the Railway project, which this workstream must not touch |
+
 ---
 
 ## 3. First deployment
@@ -873,7 +928,7 @@ Checked on 2026-11-19.
 | PostgreSQL client | `psql`, `pg_dump`, `pg_restore` 17.11 (Homebrew); a local server 17.11 is running | `railway connect`, backups, restore drills. Same major as production, which `pg_dump` requires |
 | OpenSSL · jq | present | generating secrets |
 | SSH key | `~/.ssh/id_ed25519.pub` | `railway ssh` (registered once in §3.4) |
-| Docker | CLI 29.2.1 installed, daemon not running | optional: building the images locally before the first upload |
+| Docker | Docker Desktop with CLI 29.2.1; the daemon is normally off and starts with `open -a Docker` (ready in seconds, quit it afterwards) | optional: building the images locally before the first upload (§2.8) |
 | `aws` CLI · `gh` | not installed | not needed |
 
 ### 3.2 Two decisions before you start
@@ -1234,8 +1289,8 @@ CLI 5.71 has no rollback command; the dashboard is the only place. Limits and co
 
 - Railway keeps the image of a removed deployment for 72 hours on the Hobby plan and 120 hours on Pro. After
   that there is no Rollback entry, and the old version has to be built again from its source. Railway does
-  not keep that source for you, and this folder has no history: make it a git repository (§7) so that any
-  earlier state can be checked out and deployed with `railway up`.
+  not keep that source for you. The folder has had a `.git` since 2026-11-20: commit what is deployed (and
+  push it, §7) so that any earlier state can be checked out and deployed with `railway up`.
 - A rollback does not undo migrations. That is why migrations must work with the previous code (§4.1). When
   a migration itself is the problem, restore the database (§4.6).
 - Roll the two services back independently. The console's build carries its API address; an old console
@@ -1638,6 +1693,12 @@ checks 9 and 11 (CI builds the console for an address that is not the one it tes
 `SMOKE_CORS_ORIGIN` replaces `{WEB}` in check 5. The path of check 4 can be changed with
 `SMOKE_PUBLIC_LIST_PATH`.
 
+Every line names its check in brackets: `health`, `config`, `auth`, `reference-data`, `cors`, `cors-refuse`,
+`live`, `console-health`, `console-index`, `deep-link`, `build-info`, `assets`. `SMOKE_SKIP` takes a
+comma-separated list of these keys and prints `skip` for each, so a skipped check is never silent. It exists
+for local runs while a module is missing or switched off; no check needs it today (check 4 passes since the
+catalogue module serves `GET /api/v1/categories`). Never set it against production or in CI.
+
 What it does not cover: signing in, placing an order, uploads, push. Those are covered by the backend's
 integration tests and, in the pilot, by the demo data, which goes through the real commands.
 
@@ -1653,8 +1714,9 @@ integration tests and, in the pilot, by the demo data, which goes through the re
  *   WEB_URL=http://localhost:8080 EXPECT_API_URL=https://api.example.invalid node scripts/smoke.mjs  # console only
  *
  * Optional: EXPECT_PAYMENTS_MODE, EXPECT_PHONE_VERIFICATION, SMOKE_PUBLIC_LIST_PATH (default
- * /api/v1/categories), SMOKE_TIMEOUT_MS (default 10000). Exit code 0 when every check passes, otherwise 1.
- * What each check proves: docs/DEPLOYMENT.md §5.1.
+ * /api/v1/categories), SMOKE_TIMEOUT_MS (default 10000), SMOKE_SKIP (comma-separated check keys, printed in
+ * brackets on every line, for an endpoint whose module is not written yet; never set it against production).
+ * Exit code 0 when every check that ran passes, otherwise 1. What each check proves: docs/DEPLOYMENT.md §5.1.
  */
 const origin = (value) => (value ? value.trim().replace(/\/+$/, '') : '');
 
@@ -1664,6 +1726,12 @@ const EXPECT_API = origin(process.env.EXPECT_API_URL) || API;
 const CORS_ORIGIN = origin(process.env.SMOKE_CORS_ORIGIN) || WEB;
 const LIST_PATH = process.env.SMOKE_PUBLIC_LIST_PATH || '/api/v1/categories';
 const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS) || 10_000;
+const SKIP = new Set(
+  (process.env.SMOKE_SKIP ?? '')
+    .split(',')
+    .map((key) => key.trim())
+    .filter(Boolean),
+);
 
 if (!API && !WEB) {
   console.error('Set API_URL, WEB_URL or both.');
@@ -1671,14 +1739,21 @@ if (!API && !WEB) {
 }
 
 let failures = 0;
+let skipped = 0;
 
-async function check(name, run) {
+/** `key` names the check for SMOKE_SKIP; a skipped check is printed, so a report never hides one. */
+async function check(key, name, run) {
+  if (SKIP.has(key)) {
+    skipped += 1;
+    console.log(`skip  ${name} [${key}]`);
+    return;
+  }
   try {
     const note = await run();
-    console.log(`ok    ${name}${note ? ` (${note})` : ''}`);
+    console.log(`ok    ${name} [${key}]${note ? ` (${note})` : ''}`);
   } catch (error) {
     failures += 1;
-    console.error(`FAIL  ${name}: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`FAIL  ${name} [${key}]: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -1723,14 +1798,14 @@ function openSocket(url) {
 }
 
 if (API) {
-  await check('API health', async () => {
+  await check('health', 'API health', async () => {
     const response = await request(`${API}/api/v1/health`);
     expect(response.status === 200, `status ${response.status}`);
     const body = await response.json();
     expect(body.status === 'ok', `body ${JSON.stringify(body)}`);
   });
 
-  await check('API public configuration', async () => {
+  await check('config', 'API public configuration', async () => {
     const response = await request(`${API}/api/v1/config`);
     expect(response.status === 200, `status ${response.status}`);
     const { paymentsMode, phoneVerification } = await response.json();
@@ -1752,7 +1827,7 @@ if (API) {
     return `payments ${paymentsMode}, phone verification ${phoneVerification}`;
   });
 
-  await check('API refuses anonymous callers with the error envelope', async () => {
+  await check('auth', 'API refuses anonymous callers with the error envelope', async () => {
     const response = await request(`${API}/api/v1/me`);
     expect(response.status === 401, `status ${response.status}`);
     const body = await response.json();
@@ -1760,7 +1835,7 @@ if (API) {
     expect(typeof body.error.message === 'string', 'error.message is missing');
   });
 
-  await check(`API reference data (${LIST_PATH})`, async () => {
+  await check('reference-data', `API reference data (${LIST_PATH})`, async () => {
     const response = await request(`${API}${LIST_PATH}`);
     expect(response.status === 200, `status ${response.status}`);
     const body = await response.json();
@@ -1770,32 +1845,32 @@ if (API) {
   });
 
   if (CORS_ORIGIN) {
-    await check(`CORS allows ${CORS_ORIGIN}`, async () => {
+    await check('cors', `CORS allows ${CORS_ORIGIN}`, async () => {
       const response = await preflight(CORS_ORIGIN);
       expect(response.status < 300, `status ${response.status}`);
       const allowed = header(response, 'access-control-allow-origin');
       expect(allowed === CORS_ORIGIN, `access-control-allow-origin is "${allowed}"`);
     });
 
-    await check('CORS refuses an unknown origin', async () => {
+    await check('cors-refuse', 'CORS refuses an unknown origin', async () => {
       const stranger = 'https://smoke-test.invalid';
       const allowed = header(await preflight(stranger), 'access-control-allow-origin');
       expect(allowed !== stranger && allowed !== '*', `access-control-allow-origin is "${allowed}"`);
     });
   }
 
-  await check('Live WebSocket opens', () => openSocket(`${API.replace(/^http/, 'ws')}/api/v1/live`));
+  await check('live', 'Live WebSocket opens', () => openSocket(`${API.replace(/^http/, 'ws')}/api/v1/live`));
 }
 
 if (WEB) {
   let indexHtml = '';
 
-  await check('Console health', async () => {
+  await check('console-health', 'Console health', async () => {
     const response = await request(`${WEB}/healthz`);
     expect(response.status === 200, `status ${response.status}`);
   });
 
-  await check('Console index and security headers', async () => {
+  await check('console-index', 'Console index and security headers', async () => {
     const response = await request(`${WEB}/`);
     expect(response.status === 200, `status ${response.status}`);
     expect(
@@ -1816,14 +1891,14 @@ if (WEB) {
   });
 
   for (const path of ['/portal', '/track/smoke-test']) {
-    await check(`Console deep link ${path}`, async () => {
+    await check('deep-link', `Console deep link ${path}`, async () => {
       const response = await request(`${WEB}${path}`);
       expect(response.status === 200, `status ${response.status}`);
       expect((await response.text()).includes('id="root"'), 'the app shell was not served');
     });
   }
 
-  await check('Console was built for this API', async () => {
+  await check('build-info', 'Console was built for this API', async () => {
     const response = await request(`${WEB}/build-info.json`);
     expect(response.status === 200, `status ${response.status}`);
     const info = await response.json();
@@ -1834,7 +1909,7 @@ if (WEB) {
     return `built ${info.builtAt} for ${info.apiUrl}`;
   });
 
-  await check('Console assets', async () => {
+  await check('assets', 'Console assets', async () => {
     const asset = indexHtml.match(/["'](\/assets\/[^"']+\.js)["']/)?.[1];
     expect(asset, 'index.html names no /assets/*.js file');
     const response = await request(`${WEB}${asset}`);
@@ -1849,7 +1924,7 @@ if (failures > 0) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
 }
-console.log('\nAll checks passed.');
+console.log(skipped > 0 ? `\nAll checks that ran passed (${skipped} skipped).` : '\nAll checks passed.');
 ```
 
 ---
@@ -2536,12 +2611,12 @@ The folder `/Volumes/isbuild/signing` holds the trial's throwaway key. It is not
 
 ## 7. CI on GitHub Actions
 
-The folder is not a git repository today, so nothing below runs yet. It is ready for the day it becomes
-one.
+Nothing below has run yet: the folder has had a local `.git` with a first commit since 2026-11-20, but it is
+not on GitHub. The workflows are ready for the day it is pushed.
 
 ### 7.1 Turning the folder into a repository
 
-1. `git init`, review `git status` (the `.gitignore` already excludes `node_modules`, `.build/`, keystores,
+1. `git init` (already done on this machine on 2026-11-20), review `git status` (the `.gitignore` already excludes `node_modules`, `.build/`, keystores,
    `.env.local` files and `google-services.json`), commit, push to a private GitHub repository.
 2. In GitHub: protect `main` (pull requests, the `CI` checks required); create the environment `production`
    with required reviewers.
@@ -2565,12 +2640,16 @@ turn on "Wait for CI" in the service settings. Do one or the other, not both.
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | **replace** with §7.3 | It builds Cloud Functions, starts the Firebase emulators and uses the old folder names |
 | `.github/workflows/deploy.yml` | **replace** with §7.4 | It deploys to Firebase through Google Cloud |
-| `.github/workflows/customer-app.yml` | **delete** | EAS build trigger with Firebase variables; replaced by `android.yml` |
-| `.github/workflows/driver-app.yml` | **delete** | Same |
-| `.github/workflows/android.yml` | **add** (§7.5) | Signed APK or AAB of either app, with the script of §6 |
+| `.github/workflows/customer-app.yml` | **delete** (done 2026-11-20) | EAS build trigger with Firebase variables; replaced by `android.yml` |
+| `.github/workflows/driver-app.yml` | **delete** (done 2026-11-20) | Same |
+| `.github/workflows/android.yml` | **add** (§7.5), by the `android` workstream (PLATFORM.md §15.3) | Signed APK or AAB of either app, with the script of §6 |
 | `.github/scripts/deploy-preflight.sh` | **delete** | Checks Firebase deploy settings |
 | `.github/scripts/check-storage-rules-access.sh` | **delete** | Checks Firebase Storage rules |
 | `.github/scripts/selftest.sh` | **delete** | Tests the two scripts above |
+
+The three `.github/scripts` files are not in any workstream's list in PLATFORM.md §15, so they were left in
+place on 2026-11-20. Nothing calls them any more (the new `ci.yml` does not); whoever owns `.github/` deletes
+them.
 | `.github/dependabot.yml` | **replace** with §7.6 | It has a `firebase` group |
 
 All actions are pinned to a commit, as before. `actions/checkout`, `actions/setup-node` and
@@ -2584,6 +2663,13 @@ the console build and the app bundles (`clients`), and the two container images 
 migrates and starts the API image in production mode, exactly as Railway does, smoke-tests both images, and
 then loads the demo data from the same image. The server refuses the local storage driver in production
 mode (PLATFORM.md §11.1), so the demo data, which stores photos, is loaded in development mode.
+
+On 2026-11-20 these steps would still fail, each on another workstream's missing piece and not on this file:
+`lint`, `format:check` and `typecheck` (files of the console and other workstreams), the backend tests
+(`backend/test/support/run.ts`, harness workstream), the console build in `clients` and `images` (the
+console does not compile yet), check 4 of the smoke test (catalogue module) and the demo data (`seed.ts`,
+seed workstream). CI deliberately does not use `CONSOLE_PLACEHOLDER` or `SMOKE_SKIP`: it must go green only
+when the real pieces exist.
 
 ```yaml
 name: CI
@@ -3192,9 +3278,9 @@ differs.
 
 | # | Not verified | How it shows | What to do |
 | --- | --- | --- | --- |
-| B1 | The names of §2.1 exist on paper only. `docs/PLATFORM.md` (§2.2, §2.7, §13.4) and `docs/CLIENTS.md` (§8) confirm them, including the start-up and demo-data guarantees, but the backend is not written yet | A failing image build, pre-deploy command, smoke test, or the `images` job of CI | Reconcile the documents; change one side only |
-| B2 | The two Dockerfiles and the Caddyfile were never built or run | `docker build` or the `images` job of CI fails | Start Docker Desktop and build both images locally before the first `railway up` (the commands are in the header of each Dockerfile). If `npm ci` stops over a workspace folder that is absent from the image build, copy that workspace's `package.json` in the same `COPY` block, as the Android script does |
-| B3 | `.railway/railway.ts` was never planned or applied; only its syntax was checked | `railway config plan` reports an error or an unexpected plan | `plan` is read-only: fix the file until the plan shows exactly the four additions |
+| B1 | **Backend side checked on 2026-11-20 (§2.8)**: build, start, migrate, health, config, error envelope, CORS, WebSocket and SIGTERM behave as listed. Still open: `seed --demo`, `storage-cors` against a real bucket, `/api/v1/categories`, and the console's side. Originally: the names of §2.1 exist on paper only. `docs/PLATFORM.md` (§2.2, §2.7, §13.4) and `docs/CLIENTS.md` (§8) confirm them, including the start-up and demo-data guarantees, but the backend is not written yet | A failing image build, pre-deploy command, smoke test, or the `images` job of CI | Reconcile the documents; change one side only |
+| B2 | **Mostly done on 2026-11-20 (§2.8)**: the backend image and the console image (placeholder build) were built and run, the Caddyfile validated and served. Still open: the console image with the real Vite build, and both builds on Railway's builder (linux/amd64; the local builds were linux/arm64) | `docker build` or the `images` job of CI fails | Start Docker Desktop and build both images locally before the first `railway up` (the commands are in the header of each Dockerfile). If `npm ci` stops over a workspace folder that is absent from the image build, copy that workspace's `package.json` in the same `COPY` block, as the Android script does |
+| B3 | `.railway/railway.ts` was never planned or applied; it type-checks against the SDK and evaluates locally (§2.8) | `railway config plan` reports an error or an unexpected plan | `plan` is read-only: fix the file until the plan shows exactly the four additions |
 | B4 | That the database really comes up as PostgreSQL 17 from the pinned image | `select version()` in §3.4 | Stop if it is not 17 |
 | B5 | That `railway domain` works before a service's first deployment | An error in §3.6 | The fallback order is described there |
 | B6 | That `railway ssh` starts in the image's environment (variables present) | `railway ssh --service backend -- printenv NODE_ENV` must print `production` | If variables are missing, run one-off commands as a temporary pre-deploy command instead |

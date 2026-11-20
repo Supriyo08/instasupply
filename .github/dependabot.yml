@@ -6,8 +6,6 @@ updates:
       interval: weekly
     open-pull-requests-limit: 8
     groups:
-      firebase:
-        patterns: ['firebase*', '@firebase/*']
       tooling:
         patterns:
           [
@@ -28,6 +26,8 @@ updates:
       - dependency-name: '@expo/*'
       - dependency-name: 'react'
       - dependency-name: 'react-dom'
+      # Pinned on purpose (docs/DEPLOYMENT.md §2.7): upgrade it by hand and read `railway config plan`.
+      - dependency-name: 'railway'
   - package-ecosystem: github-actions
     directory: /
     schedule:

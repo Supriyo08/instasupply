@@ -1,17 +1,21 @@
-import { toMillis, type Delivery, type LatLng, type Priority } from '@instasupply/shared';
+import { fromLocal, toLocal, toMillis, type Delivery, type LatLng, type Priority } from '@instasupply/shared';
 
-/** Editable form state; numbers stay strings until validation so inputs behave naturally. */
+/**
+ * Editable form state of a manual delivery; numbers stay strings until validation so inputs behave
+ * naturally. There is no cash on delivery in the marketplace (MARKETPLACE §12.5): cards only.
+ */
 export interface DeliveryDraft {
   customerName: string;
   customerPhone: string;
   customerEmail: string;
   address: string;
   location: LatLng | null;
+  /** The geocoder's label for the pin, when it came from "Find address" (shown as where the pin landed). */
+  locationLabel: string | null;
   addressNotes: string;
   notes: string;
   packageCount: string;
   priority: Priority;
-  codAmount: string;
   requireCode: boolean;
   windowStart: string;
   windowEnd: string;
@@ -24,29 +28,40 @@ export const EMPTY_DRAFT: DeliveryDraft = {
   customerEmail: '',
   address: '',
   location: null,
+  locationLabel: null,
   addressNotes: '',
   notes: '',
   packageCount: '1',
   priority: 'normal',
-  codAmount: '',
   requireCode: false,
   windowStart: '',
   windowEnd: '',
   driverId: null,
 };
 
-/** `datetime-local` value ↔ epoch ms in the browser's time zone. */
+const pad = (value: number) => String(value).padStart(2, '0');
+
+/**
+ * `datetime-local` value ↔ epoch ms, always in Toronto time (MARKETPLACE §4.1), whatever the time zone
+ * of the dispatcher's computer.
+ */
 export function toLocalInput(millis: number | null): string {
   if (millis == null) return '';
-  const date = new Date(millis);
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const local = toLocal(millis);
+  return `${local.date}T${pad(Math.floor(local.minutes / 60))}:${pad(local.minutes % 60)}`;
 }
 
 export function fromLocalInput(value: string): number | null {
-  if (!value) return null;
-  const millis = new Date(value).getTime();
-  return Number.isFinite(millis) ? millis : null;
+  const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const hours = Number(match[2]);
+  const minutes = Number(match[3]);
+  if (hours > 23 || minutes > 59) return null;
+  try {
+    return fromLocal(match[1]!, hours * 60 + minutes);
+  } catch {
+    return null;
+  }
 }
 
 /** Shape accepted by `validateDeliveryInput`. */
@@ -61,7 +76,6 @@ export function draftToInput(draft: DeliveryDraft) {
     notes: draft.notes,
     packageCount: draft.packageCount,
     priority: draft.priority,
-    codAmount: draft.codAmount,
     requireCode: draft.requireCode,
     driverId: draft.driverId,
     windowStart: fromLocalInput(draft.windowStart),
@@ -76,11 +90,11 @@ export function deliveryToDraft(delivery: Delivery): DeliveryDraft {
     customerEmail: delivery.customer.email ?? '',
     address: delivery.address,
     location: delivery.location,
+    locationLabel: null,
     addressNotes: delivery.addressNotes ?? '',
     notes: delivery.notes ?? '',
     packageCount: String(delivery.packageCount ?? 1),
     priority: delivery.priority,
-    codAmount: delivery.codAmount != null ? String(delivery.codAmount) : '',
     requireCode: delivery.requireCode,
     windowStart: toLocalInput(toMillis(delivery.windowStart)),
     windowEnd: toLocalInput(toMillis(delivery.windowEnd)),

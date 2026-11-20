@@ -1,10 +1,11 @@
-import { normalizePhone } from '@instasupply/shared';
+import { formatPhone, normalizePhone } from '@instasupply/shared';
 import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Banner, Button, Input, Screen, Text } from '@/components/ui';
 import { requestPhoneCode, signOut, verifyPhoneCode } from '@/features/auth/auth-service';
 import { StepHeader } from '@/features/auth/StepHeader';
+import { ONBOARDING_STEPS } from '@/features/vehicle/onboarding-steps';
 import { describeError } from '@/lib/errors';
 
 export default function VerifyPhoneStep() {
@@ -24,7 +25,7 @@ export default function VerifyPhoneStep() {
 
   const send = async () => {
     const normalized = normalizePhone(phone);
-    if (!normalized) return setError('Enter a valid mobile number, e.g. 98765 43210.');
+    if (!normalized) return setError('Enter a Canadian mobile number, e.g. (416) 555-0151.');
     setBusy(true);
     setError(null);
     try {
@@ -56,8 +57,8 @@ export default function VerifyPhoneStep() {
   return (
     <Screen keyboard>
       <StepHeader
-        step={3}
-        total={4}
+        step={ONBOARDING_STEPS.verifyPhone}
+        total={ONBOARDING_STEPS.total}
         title="Verify your number"
         subtitle="Customers and dispatch reach you on this number. We'll text you a 6-digit code."
       />
@@ -67,19 +68,19 @@ export default function VerifyPhoneStep() {
           <Input
             label="Mobile number"
             icon="call-outline"
-            placeholder="98765 43210"
+            placeholder="(416) 555-0151"
             keyboardType="phone-pad"
             autoComplete="tel"
             value={phone}
             onChangeText={setPhone}
-            hint="Numbers without a country code are treated as Indian (+91)."
+            hint="Canadian mobile number; +1 is added for you."
           />
           <Button label="Send code" size="lg" loading={busy} onPress={send} />
         </>
       ) : (
         <>
           <Text color="muted">
-            Code sent to <Text variant="bodyStrong">{sentTo}</Text>
+            Code sent to <Text variant="bodyStrong">{formatPhone(sentTo)}</Text>
           </Text>
           {devCode ? (
             <Banner tone="info" title="Development mode" message={`Your code is ${devCode}`} />

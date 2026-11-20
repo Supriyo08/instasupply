@@ -1,0 +1,47 @@
+# What `docker build` must not send to the Docker daemon (the build context is the repository root).
+# Docker's syntax, not git's: a pattern only matches at the root of the context unless it starts with **/
+# Keep in step with .railwayignore.
+
+# --- never leaves this machine -------------------------------------------------------------------------
+**/.env
+**/.env.*
+!**/.env.example
+**/*.keystore
+**/*.jks
+**/*.p8
+**/*.p12
+**/*.pem
+**/*.mobileprovision
+**/credentials.json
+**/service-account*.json
+**/google-services.json
+**/GoogleService-Info.plist
+**/*.apk
+**/*.aab
+
+# --- not needed to build the backend or the frontend image ------------------------------------------------
+**/node_modules
+# The Railway CLI always leaves .git out of its upload; docker build has to be told.
+.git
+.build
+app
+legacy
+docs
+scripts
+.github
+.claude
+.railway
+README.md
+backend/.data
+.pgdata
+packages/art/preview
+packages/expo-firebase
+
+# --- build output and caches ------------------------------------------------------------------------------
+**/dist
+**/web-build
+**/coverage
+**/.expo
+**/*.tsbuildinfo
+**/*.log
+**/.DS_Store

@@ -40,3 +40,13 @@ export async function textPhone(phone: string, body?: string) {
     `sms:${phone.replace(/[^\d+]/g, '')}${body ? `${separator}body=${encodeURIComponent(body)}` : ''}`,
   );
 }
+
+/** A link that opens a point in the maps app (or Google Maps on the web): the map fallback card. */
+export function mapsUrlFor(point: LatLng, label?: string): string {
+  const query = `${point.lat},${point.lng}`;
+  if (Platform.OS === 'ios')
+    return `http://maps.apple.com/?q=${encodeURIComponent(label ?? query)}&ll=${query}`;
+  if (Platform.OS === 'android')
+    return `geo:${query}?q=${query}${label ? `(${encodeURIComponent(label)})` : ''}`;
+  return `https://www.google.com/maps/search/?api=1&query=${query}`;
+}

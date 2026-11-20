@@ -65,7 +65,9 @@ export function registerFileRoutes(app: FastifyInstance, deps: Deps): void {
     url: '/media/*',
     policy: 'public',
     handler: async (ctx, _input, _actor, request, reply) => {
-      const path = decodeURIComponent((request.params as { '*': string })['*'] ?? '');
+      // The router has already decoded the wildcard; decoding again would turn "%25" into a different path
+      // and throw on a malformed escape.
+      const path = (request.params as { '*'?: string })['*'] ?? '';
       const row = path ? await findFileByPath(deps.pool, path) : null;
       // Always not-found, also for private files: the media path proves nothing about who may read it.
       if (!row || row.status !== 'ready' || !PUBLIC_PURPOSES.has(row.purpose))

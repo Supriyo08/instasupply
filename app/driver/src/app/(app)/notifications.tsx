@@ -2,9 +2,28 @@ import { formatRelativeTime, type AppNotification } from '@instasupply/shared';
 import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 
-import { Button, Card, EmptyState, Icon, Screen, Text, type IconName } from '@/components/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  Icon,
+  Screen,
+  Skeleton,
+  Text,
+  type IconName,
+} from '@/components/ui';
+import { SceneArt } from '@/features/art/SceneArt';
 import { useDriver } from '@/features/auth/SessionProvider';
-import { markAllRead, markRead, notificationHref, useNotifications } from '@/features/notifications/hooks';
+import { notify } from '@/features/deliveries/useDeliveryAction';
+import {
+  hrefForNotification,
+  useMarkAllRead,
+  useMarkRead,
+  useNotifications,
+} from '@/features/notifications/hooks';
+import { describeError } from '@/lib/api';
+import { useNow } from '@/lib/use-now';
 import { useTheme } from '@/theme/ThemeProvider';
 
 const ICONS: Partial<Record<AppNotification['type'], IconName>> = {
@@ -12,41 +31,90 @@ const ICONS: Partial<Record<AppNotification['type'], IconName>> = {
   delivery_unassigned: 'swap-horizontal',
   delivery_cancelled: 'close-circle',
   delivery_updated: 'create',
+  delivery_failed: 'alert-circle',
+  delivery_delivered: 'checkmark-circle',
   chat_message: 'chatbubble',
+  job_offer: 'briefcase',
+  job_update: 'briefcase',
+  payout_sent: 'wallet',
+  vehicle_review: 'car',
   account_approved: 'shield-checkmark',
+  account_suspended: 'lock-closed',
   test: 'notifications',
 };
 
+/**
+ * The inbox (CLIENTS §4.6: `queries.notifications(uid)`, live through `user:{uid}:notifications`).
+ * Mark read is optimistic (§1.12); a row opens where its push would (§6.4).
+ */
 export default function NotificationsScreen() {
   const { user } = useDriver();
   const { colors } = useTheme();
-  const { data, loading, unread } = useNotifications(user.uid);
+  const { data, loading, error, retry, refreshing, unread } = useNotifications(user.uid);
+  const markRead = useMarkRead(user.uid);
+  const markAllRead = useMarkAllRead(user.uid);
+  const now = useNow();
 
   const open = (item: AppNotification) => {
-    if (!item.read) void markRead(item.id).catch(() => undefined);
-    const href = notificationHref({ ...item.data, type: item.type });
-    if (href && href !== '/notifications') router.push(href as never);
+    // Optimistic: the row turns read at once; a failure puts it back (the hook rolls back).
+    if (!item.read) void markRead.run(item.id).catch(() => undefined);
+    const href = hrefForNotification(item);
+    if (href !== '/notifications') router.push(href);
+  };
+
+  const readAll = () => {
+    markAllRead.run().catch((cause: unknown) => notify("Couldn't mark them read", describeError(cause)));
   };
 
   return (
-    <Screen edges={[]}>
+    <Screen edges={[]} refreshing={refreshing} onRefresh={retry}>
       {unread > 0 ? (
-        <Button
-          label={`Mark all ${unread} as read`}
-          variant="ghost"
-          icon="checkmark-done"
-          onPress={() => void markAllRead(data)}
-        />
+        <View style={styles.toolbar}>
+          <Text variant="caption" color="muted" accessibilityLiveRegion="polite">
+            {unread} unread
+          </Text>
+          <Button
+            label="Mark all as read"
+            variant="ghost"
+            icon="checkmark-done"
+            loading={markAllRead.busy}
+            onPress={readAll}
+          />
+        </View>
       ) : null}
-      {!loading && data.length === 0 ? (
-        <EmptyState
-          icon="notifications-off-outline"
-          title="You're all caught up"
-          message="New assignments and messages will appear here."
-        />
+      {error ? <ErrorState error={error} onRetry={retry} title="Couldn't load your notifications" /> : null}
+      {loading && data.length === 0 ? (
+        <View style={styles.list} accessibilityLabel="Loading notifications">
+          {[0, 1, 2, 3].map((index) => (
+            <Skeleton key={index} height={72} radius={16} />
+          ))}
+        </View>
+      ) : null}
+      {!loading && !error && data.length === 0 ? (
+        <>
+          <SceneArt scene="scene-local-suppliers" height={150} />
+          <EmptyState
+            icon="notifications-off-outline"
+            title="You're all caught up"
+            message="New jobs near you, assignments from dispatch and payouts show up here."
+          />
+        </>
       ) : null}
       {data.map((item) => (
-        <Card key={item.id} onPress={() => open(item)} accent={item.read ? undefined : colors.primary}>
+        <Card
+          key={item.id}
+          onPress={() => open(item)}
+          accent={item.read ? undefined : colors.primary}
+          accessibilityLabel={[
+            item.read ? null : 'Unread',
+            item.title,
+            item.body,
+            formatRelativeTime(item.createdAt, now),
+          ]
+            .filter(Boolean)
+            .map((part) => String(part).replace(/[.!?]+$/, ''))
+            .join('. ')}
+        >
           <View style={styles.row}>
             <View
               style={[styles.icon, { backgroundColor: item.read ? colors.surfaceMuted : colors.primarySoft }]}
@@ -63,9 +131,10 @@ export default function NotificationsScreen() {
                 {item.body}
               </Text>
               <Text variant="caption" color="subtle">
-                {formatRelativeTime(item.createdAt)}
+                {formatRelativeTime(item.createdAt, now)}
               </Text>
             </View>
+            {item.read ? null : <View style={[styles.dot, { backgroundColor: colors.primary }]} />}
           </View>
         </Card>
       ))}
@@ -74,7 +143,10 @@ export default function NotificationsScreen() {
 }
 
 const styles = StyleSheet.create({
+  dot: { borderRadius: 4, height: 8, marginTop: 6, width: 8 },
   flex: { flex: 1, gap: 2 },
   icon: { alignItems: 'center', borderRadius: 18, height: 36, justifyContent: 'center', width: 36 },
+  list: { gap: 12 },
   row: { flexDirection: 'row', gap: 12 },
+  toolbar: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
 });

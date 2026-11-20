@@ -1,28 +1,23 @@
-import { describeError } from '@instasupply/expo-firebase';
-import {
-  createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
-  signInWithEmailAndPassword,
-  signOut as firebaseSignOut,
-  updateProfile,
-} from 'firebase/auth';
+import type { AccountType } from '@instasupply/shared';
 
+import { api, describeError } from '@/lib/api';
 import { call } from '@/lib/callables';
-import { auth } from '@/lib/firebase';
-
-// Sign-up collects the phone number, but verification happens on the next screen.
-let pendingPhone: string | null = null;
-export const rememberedSignUpPhone = () => pendingPhone;
 
 /**
- * Sign-up creates the Firebase user first and the shopping profile right after. While `pending`,
- * the session reports "loading" instead of "needs_profile". If the account exists but its profile
- * could not be created, `failure` lets /complete-profile pre-fill the name and say what happened.
+ * The account flows of docs/CLIENTS.md §2.2. Sign-up is `register` (an account without a role)
+ * followed by `registerCustomer` (the shopping profile). While that runs, `isSigningUp()` is true
+ * and the session reports "loading" instead of "needs_profile". If the account exists but its
+ * profile could not be created, `getSignUpFailure` lets /complete-profile pre-fill and explain.
  */
 interface SignUpState {
   pending: boolean;
   failure: { uid: string; name: string; message: string } | null;
 }
+
+// Sign-up may collect the phone number; verification happens on the next screen.
+let pendingPhone: string | null = null;
+/** The phone typed at sign-up, to pre-fill /verify-phone. */
+export const rememberedSignUpPhone = () => pendingPhone;
 
 let signUp: SignUpState = { pending: false, failure: null };
 const signUpListeners = new Set<() => void>();
@@ -40,7 +35,7 @@ export function subscribeToSignUp(listener: () => void) {
   };
 }
 
-/** True while `createAccount` is still creating the account and its profile. */
+/** True while `createAccount` is between `register` and the end of `registerCustomer`. */
 export const isSigningUp = () => signUp.pending;
 
 /** Why sign-up stopped after creating this account, if it did. */
@@ -53,73 +48,95 @@ export function clearSignUpFailure() {
 }
 
 export async function signIn(email: string, password: string) {
-  await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
+  await api.session.signIn({ email: email.trim().toLowerCase(), password });
 }
 
-/** Create the account and the shopping profile, then pick up the `customer` role claim. */
-export async function createAccount(input: {
+export interface CreateAccountInput {
   name: string;
   email: string;
-  phone: string | null;
   password: string;
-}) {
-  pendingPhone = input.phone;
+  companyName?: string | null;
+  accountType?: AccountType | null;
+  /** "Send me deals" (CASL): off unless ticked. */
+  marketingOptIn?: boolean;
+  /** E.164; only remembered for /verify-phone. */
+  phone?: string | null;
+}
+
+/** Creates the account, then the shopping profile (`registerCustomer`), then reloads /me. */
+export async function createAccount(input: CreateAccountInput) {
   const name = input.name.trim();
+  pendingPhone = input.phone ?? null;
   setSignUp({ pending: true, failure: null });
   try {
-    const credential = await createUserWithEmailAndPassword(
-      auth,
-      input.email.trim().toLowerCase(),
-      input.password,
-    );
-    await updateProfile(credential.user, { displayName: name });
-    await completeProfile(name);
+    await api.session.register({
+      email: input.email.trim().toLowerCase(),
+      password: input.password,
+      displayName: name,
+    });
+  } catch (error) {
+    setSignUp({ pending: false, failure: null });
+    throw error;
+  }
+  try {
+    await completeProfile({
+      displayName: name,
+      companyName: input.companyName ?? null,
+      accountType: input.accountType ?? null,
+      marketingOptIn: input.marketingOptIn ?? false,
+    });
     setSignUp({ pending: false, failure: null });
   } catch (error) {
     // With an account but no profile the session moves on to "needs_profile": record why first.
-    const uid = auth.currentUser?.uid;
+    const uid = api.session.getSnapshot().user?.uid;
     setSignUp({ pending: false, failure: uid ? { uid, name, message: describeError(error) } : null });
     throw error;
   }
 }
 
-/** Creates/updates the profile; also used to recover if sign-up was interrupted. */
-export async function completeProfile(name: string) {
-  await call('registerCustomer', { displayName: name.trim() });
-  await auth.currentUser?.getIdToken(true);
+export interface CompleteProfileInput {
+  displayName: string;
+  companyName?: string | null;
+  accountType?: AccountType | null;
+  marketingOptIn?: boolean;
 }
 
-/**
- * Makes sure the signed-in shopper's ID token carries the `customer` role. The claim may only be
- * newer than the token, so refresh first. If it is really missing (registration stopped before the
- * claim was set), `registerCustomer` re-applies it for an active profile: pass that profile's name,
- * or null when the profile isn't active. Resolves false when the role still isn't there.
- */
-export async function confirmCustomerClaim(activeProfileName: string | null): Promise<boolean> {
-  const user = auth.currentUser;
-  if (!user) return true;
-  const hasClaim = async () => (await user.getIdTokenResult(true)).claims.role === 'customer';
-  if (await hasClaim()) return true;
-  if (activeProfileName === null) return false;
-  await call('registerCustomer', { displayName: activeProfileName });
-  return hasClaim();
+/** Creates or repairs the shopping profile; also used after an interrupted sign-up. */
+export async function completeProfile(input: CompleteProfileInput) {
+  await call('registerCustomer', { ...input, displayName: input.displayName.trim() });
+  await api.session.refreshProfile();
 }
 
-export async function requestPhoneCode(phoneNumber: string) {
+export function requestPhoneCode(phoneNumber: string) {
   return call('requestPhoneOtp', { phoneNumber });
 }
 
 export async function verifyPhoneCode(code: string) {
   const result = await call('verifyPhoneOtp', { code });
-  await auth.currentUser?.reload();
-  await auth.currentUser?.getIdToken(true);
+  await api.session.refreshProfile();
   return result;
 }
 
-export async function resetPassword(email: string) {
-  await sendPasswordResetEmail(auth, email.trim().toLowerCase());
+/** Step 1 of the forgot-password screen: the server emails a 6-digit code. */
+export function requestPasswordReset(email: string) {
+  return api.session.requestPasswordReset(email.trim().toLowerCase());
 }
 
-export async function signOut() {
-  await firebaseSignOut(auth);
+/** Step 2: the code from the email and the new password. */
+export function resetPassword(input: { email: string; code: string; newPassword: string }) {
+  return api.session.resetPassword({ ...input, email: input.email.trim().toLowerCase() });
+}
+
+/** Signed-in "Change password" form. */
+export function changePassword(input: { currentPassword: string; newPassword: string }) {
+  return api.session.changePassword(input);
+}
+
+/**
+ * Ends the session on this device. Never rejects: `POST /auth/logout` also removes this install's
+ * push device; offline, the logout is queued (docs/CLIENTS.md §2.5). Clearing the cart is the
+ * caller's job (`useSignOut`), because only screens hold the cart.
+ */
+export function signOut() {
+  return api.session.signOut();
 }

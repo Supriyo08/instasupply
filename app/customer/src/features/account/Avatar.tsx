@@ -1,12 +1,23 @@
 import { initials } from '@instasupply/shared';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Icon, Text } from '@/components/ui';
 import { colors, fonts, gradient, shadows } from '@/theme/tokens';
 
-/** Initials on the brand gradient inside a white ring, with an optional edit badge. */
-export function Avatar({ name, size = 96, onEdit }: { name: string; size?: number; onEdit?: () => void }) {
+/** The profile photo, or initials on the brand gradient, inside a white ring, with an optional edit badge. */
+export function Avatar({
+  name,
+  size = 96,
+  uri,
+  onEdit,
+}: {
+  name: string;
+  size?: number;
+  uri?: string | null;
+  onEdit?: () => void;
+}) {
   const ring = Math.max(3, Math.round(size / 26));
   const badge = Math.round(size * 0.3);
   return (
@@ -33,6 +44,14 @@ export function Avatar({ name, size = 96, onEdit }: { name: string; size?: numbe
         >
           {initials(name)}
         </Text>
+        {uri ? (
+          <Image
+            source={{ uri }}
+            style={[StyleSheet.absoluteFill, { borderRadius: size / 2 }]}
+            contentFit="cover"
+            accessibilityLabel={`Photo of ${name}`}
+          />
+        ) : null}
       </LinearGradient>
       {onEdit ? (
         <Pressable
@@ -63,7 +82,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
   },
-  fill: { alignItems: 'center', flex: 1, justifyContent: 'center' },
+  fill: { alignItems: 'center', flex: 1, justifyContent: 'center', overflow: 'hidden' },
   initials: {
     color: colors.white,
     fontFamily: fonts.semibold,

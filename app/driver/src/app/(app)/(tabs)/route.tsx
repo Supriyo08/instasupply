@@ -1,200 +1,235 @@
-import { formatClock, formatDistance, formatDuration, formatRelativeTime } from '@instasupply/shared';
+import { formatClockET, formatDistance, formatDuration, formatRelativeTime } from '@instasupply/shared';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Badge, Button, EmptyState, Icon, StatusBadge, Text } from '@/components/ui';
+import { AppMap, fitKeyFor } from '@/components/map';
+import { TabHeader } from '@/components/TabHeader';
+import {
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  Icon,
+  Screen,
+  SectionHeader,
+  Skeleton,
+  Text,
+} from '@/components/ui';
+import { SceneArt } from '@/features/art/SceneArt';
 import { useDriver } from '@/features/auth/SessionProvider';
-import { useOrderedStops } from '@/features/deliveries/hooks';
-import { notify } from '@/features/deliveries/useDeliveryAction';
+import { optimizeRoute } from '@/features/deliveries/actions';
+import { nextStopOf, useOrderedStops, type PlannedStop } from '@/features/deliveries/hooks';
 import { usePresence } from '@/features/location/PresenceProvider';
-import { RouteMap } from '@/features/route/RouteMap';
-import { nextStopOf, routePath, toMapStops } from '@/features/route/route-helpers';
-import { call } from '@/lib/callables';
-import { describeError } from '@/lib/errors';
+import { deliveryIdOfStopKey, driverMarker, routeLine, stopMarkers } from '@/features/route/route-map';
+import { describeError } from '@/lib/api';
 import { openNavigation } from '@/lib/links';
+import { useNow } from '@/lib/use-now';
 import { useTheme } from '@/theme/ThemeProvider';
 
+/**
+ * The planned route (MARKETPLACE §10 `(tabs)/route`, §5.11; CLIENTS §4.6, §7.4): pickup stops at the
+ * store and drop-off stops at the site, a job's pickup always before its drop-off. Stops come from
+ * `useOrderedStops`, which treats a plan without `stops` as no plan (R56, R61).
+ */
 export default function RouteScreen() {
   const { user } = useDriver();
+  const { lastFix } = usePresence();
+  const now = useNow();
   const { colors } = useTheme();
-  const { lastFix, currentPosition } = usePresence();
-  const { stops, route, loading } = useOrderedStops(user.uid);
-  const [optimizing, setOptimizing] = useState(false);
+  const { stops, route, loading, error, retry } = useOrderedStops(user.uid);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
 
   const next = nextStopOf(stops);
-  const driver = lastFix ?? route?.origin ?? null;
-  const mapStops = useMemo(() => toMapStops(stops, next?.delivery.id ?? null), [stops, next?.delivery.id]);
-  const path = useMemo(() => routePath(route, driver, stops), [route, driver, stops]);
+  const map = useMemo(() => {
+    const driver = driverMarker(lastFix);
+    const markers = [...(driver ? [driver] : []), ...stopMarkers(stops, next?.key ?? null)];
+    // Fit on the stops (and the driver once), so a moving driver does not pull the camera around.
+    const points = [...(driver ? [driver.position] : []), ...stops.map((stop) => stop.location)];
+    const keyPoints = stops.map((stop) => stop.location);
+    return {
+      markers,
+      polylines: stops.length > 0 ? [routeLine(route, driver?.position ?? null, stops)] : [],
+      fit: points.length > 0 ? { key: fitKeyFor(keyPoints) || 'driver', points } : null,
+    };
+  }, [lastFix, stops, route, next?.key]);
 
   const reoptimize = async () => {
-    setOptimizing(true);
+    setBusy(true);
+    setProblem(null);
     try {
-      const origin = await currentPosition();
-      const result = await call('optimizeRoute', {
-        origin: origin ? { lat: origin.lat, lng: origin.lng } : null,
-      });
-      notify(
-        'Route updated',
-        `${result.stops} stops · ${formatDuration(result.totalSeconds)} · ${formatDistance(result.totalMeters)}`,
-      );
-    } catch (error) {
-      notify("Couldn't re-plan the route", describeError(error));
+      await optimizeRoute(lastFix ? { lat: lastFix.lat, lng: lastFix.lng } : null);
+    } catch (cause) {
+      setProblem(describeError(cause));
     } finally {
-      setOptimizing(false);
+      setBusy(false);
     }
   };
 
   const navigateAll = () => {
-    if (stops.length === 0) return;
-    const ordered = stops.map((stop) => stop.delivery.location);
-    void openNavigation(ordered[ordered.length - 1]!, { origin: lastFix, waypoints: ordered.slice(0, -1) });
+    const ahead = stops.filter((stop) => stop.delivery.status !== 'assigned');
+    const last = ahead[ahead.length - 1];
+    if (!last) return;
+    void openNavigation(last.location, {
+      origin: lastFix ? { lat: lastFix.lat, lng: lastFix.lng } : null,
+      waypoints: ahead.slice(0, -1).map((stop) => stop.location),
+    });
   };
 
+  const pickups = stops.filter((stop) => stop.kind === 'pickup').length;
+  const subtitle =
+    stops.length === 0
+      ? 'No stops planned'
+      : `${stops.length} ${stops.length === 1 ? 'stop' : 'stops'} · ${pickups} at stores`;
+
   return (
-    <SafeAreaView edges={['top']} style={[styles.fill, { backgroundColor: colors.background }]}>
-      <RouteMap
-        style={styles.map}
-        driver={driver ? { lat: driver.lat, lng: driver.lng, heading: lastFix?.heading ?? null } : null}
-        stops={mapStops}
-        path={path}
-        onStopPress={(id) => router.push(`/delivery/${id}`)}
-      />
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.summary}>
-          <View style={styles.flex}>
-            <Text variant="title">{stops.length ? `${stops.length} stops` : 'No stops'}</Text>
-            <Text variant="caption" color="subtle">
-              {route?.totalSeconds
-                ? `${formatDuration(route.totalSeconds)} driving · ${formatDistance(route.totalMeters)} · planned ${formatRelativeTime(route.computedAt)}`
-                : 'Your optimized route appears here.'}
-            </Text>
-          </View>
-          {route ? (
-            <Badge
-              label={
-                route.provider === 'google'
-                  ? 'Live traffic'
-                  : route.provider === 'osrm'
-                    ? 'Road network'
-                    : 'Estimated'
-              }
-              tone={route.provider === 'google' ? 'success' : 'neutral'}
-              icon={route.provider === 'google' ? 'pulse' : 'analytics-outline'}
-            />
-          ) : null}
-        </View>
+    <Screen onRefresh={retry} refreshing={false}>
+      <TabHeader title="Route" subtitle={subtitle} />
+      {loading ? (
+        <Skeleton height={280} radius={16} />
+      ) : (
+        <AppMap
+          interactive
+          markers={map.markers}
+          polylines={map.polylines}
+          fit={map.fit}
+          onMarkerPress={(id) => {
+            if (id !== 'driver') router.push(`/delivery/${deliveryIdOfStopKey(id)}`);
+          }}
+          style={styles.map}
+          accessibilityLabel={`Map of your route: ${stops.length} stops, ${pickups} at stores${lastFix ? ', and your position' : ''}`}
+        />
+      )}
 
-        <View style={styles.actions}>
-          <View style={styles.flex}>
-            <Button
-              label="Re-optimize"
-              icon="sparkles-outline"
-              variant="secondary"
-              loading={optimizing}
-              onPress={reoptimize}
-            />
-          </View>
-          <View style={styles.flex}>
-            <Button
-              label="Navigate all"
-              icon="navigate"
-              disabled={stops.length === 0}
-              onPress={navigateAll}
-            />
-          </View>
-        </View>
+      {error ? <ErrorState error={error} onRetry={retry} title="Couldn't load your route" /> : null}
+      {problem ? <Banner tone="danger" title="Couldn't re-plan the route" message={problem} /> : null}
 
-        {!loading && stops.length === 0 ? (
+      {!loading && !error && stops.length === 0 ? (
+        <Card>
+          <SceneArt scene="scene-live-tracking" height={130} />
           <EmptyState
             icon="map-outline"
-            title="Nothing to route yet"
-            message="Accepted deliveries are ordered here automatically."
+            title="Nothing on your route"
+            message="Claimed and assigned jobs appear here with the store first, then the site."
+            action={<Button label="Find a job" fullWidth={false} onPress={() => router.navigate('/jobs')} />}
           />
-        ) : null}
+        </Card>
+      ) : null}
 
-        {stops.map((stop, index) => {
-          const isNext = stop.delivery.id === next?.delivery.id;
-          return (
-            <View key={stop.delivery.id} style={styles.stopRow}>
-              <View style={styles.rail}>
-                <View
-                  style={[
-                    styles.badge,
-                    {
-                      backgroundColor: isNext ? colors.primary : colors.surface,
-                      borderColor: colors.primary,
-                    },
-                  ]}
-                >
-                  <Text variant="micro" style={{ color: isNext ? colors.onPrimary : colors.primary }}>
-                    {stop.sequence}
-                  </Text>
-                </View>
-                {index < stops.length - 1 ? (
-                  <View style={[styles.line, { backgroundColor: colors.border }]} />
-                ) : null}
-              </View>
-              <View style={styles.stopBody}>
-                <View style={styles.stopTitle}>
-                  <Text
-                    variant="bodyStrong"
-                    numberOfLines={1}
-                    style={styles.flex}
-                    onPress={() => router.push(`/delivery/${stop.delivery.id}`)}
-                  >
-                    {stop.delivery.customer.name}
-                  </Text>
-                  {stop.etaAt ? (
-                    <Text variant="caption" color="primary">
-                      {formatClock(stop.etaAt)}
-                    </Text>
-                  ) : null}
-                </View>
-                <Text variant="caption" color="muted" numberOfLines={1}>
-                  {stop.delivery.address}
+      {stops.length > 0 ? (
+        <>
+          <Card>
+            <View style={styles.summary}>
+              <View style={styles.flex}>
+                <Text variant="heading">
+                  {route
+                    ? `${formatDistance(route.totalMeters)} · ${formatDuration(route.totalSeconds)}`
+                    : 'Not planned yet'}
                 </Text>
-                <View style={styles.stopMeta}>
-                  <StatusBadge status={stop.delivery.status} />
-                  {stop.plan ? (
-                    <View style={styles.leg}>
-                      <Icon name="car-outline" size={13} color={colors.textSubtle} />
-                      <Text variant="caption" color="subtle">
-                        {formatDuration(stop.plan.legSeconds)} · {formatDistance(stop.plan.legMeters)}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
+                <Text variant="caption" color="muted">
+                  {route
+                    ? `Planned ${formatRelativeTime(route.computedAt, now)}${route.provider === 'estimate' ? ' · estimated times' : ''}`
+                    : 'The route is planned when a job is added. Tap Re-plan to plan it now.'}
+                </Text>
               </View>
             </View>
-          );
-        })}
-      </ScrollView>
-    </SafeAreaView>
+            <View style={styles.actions}>
+              <Button
+                label="Re-plan from here"
+                icon="git-branch-outline"
+                variant="secondary"
+                loading={busy}
+                style={styles.flex}
+                onPress={() => void reoptimize()}
+              />
+              <Button label="Navigate" icon="navigate" style={styles.flex} onPress={navigateAll} />
+            </View>
+          </Card>
+
+          <SectionHeader title="Stops in order" />
+          {stops.map((stop) => (
+            <StopRow
+              key={stop.key}
+              stop={stop}
+              next={stop.key === next?.key}
+              colors={{ pickup: colors.warning, dropoff: colors.primary, border: colors.border }}
+            />
+          ))}
+        </>
+      ) : null}
+    </Screen>
+  );
+}
+
+function StopRow({
+  stop,
+  next,
+  colors,
+}: {
+  stop: PlannedStop;
+  next: boolean;
+  colors: { pickup: string; dropoff: string; border: string };
+}) {
+  const pickup = stop.kind === 'pickup';
+  const tone = pickup ? colors.pickup : colors.dropoff;
+  const what = pickup ? 'Pick up at' : 'Drop off at';
+  const pending = stop.delivery.status === 'assigned';
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Stop ${stop.sequence}. ${what} ${stop.title}, ${stop.address}${stop.etaAt ? `, ETA ${formatClockET(stop.etaAt)}` : ''}${pending ? ', waiting for you to accept' : ''}`}
+      onPress={() => router.push(`/delivery/${stop.delivery.id}`)}
+      style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1 })}
+    >
+      <Card accent={next ? tone : undefined}>
+        <View style={styles.stop}>
+          <View style={[styles.badge, { borderColor: tone }]}>
+            <Text variant="bodyStrong" style={{ color: tone }}>
+              {stop.sequence}
+            </Text>
+          </View>
+          <View style={styles.flex}>
+            <View style={styles.kindRow}>
+              <Icon name={pickup ? 'storefront-outline' : 'construct-outline'} size={14} color={tone} />
+              <Text variant="micro" style={{ color: tone }}>
+                {pickup ? 'STORE PICKUP' : 'SITE DROP-OFF'}
+                {next ? ' · NEXT' : ''}
+              </Text>
+            </View>
+            <Text variant="bodyStrong" numberOfLines={1}>
+              {stop.title}
+            </Text>
+            <Text variant="caption" color="muted" numberOfLines={2}>
+              {stop.address}
+            </Text>
+            <Text variant="caption" color="subtle">
+              {stop.delivery.orderId}
+              {stop.etaAt ? ` · ETA ${formatClockET(stop.etaAt)}` : ''}
+              {pending ? ' · accept on Today' : ''}
+            </Text>
+          </View>
+          <Icon name="chevron-forward" size={18} color={colors.border} />
+        </View>
+      </Card>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  actions: { flexDirection: 'row', gap: 10 },
+  actions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   badge: {
     alignItems: 'center',
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 2,
-    height: 28,
+    height: 32,
     justifyContent: 'center',
-    width: 28,
+    width: 32,
   },
-  content: { gap: 14, padding: 20, paddingBottom: 40 },
-  fill: { flex: 1 },
   flex: { flex: 1 },
-  leg: { alignItems: 'center', flexDirection: 'row', gap: 4 },
-  line: { flex: 1, marginVertical: 2, width: 2 },
-  map: { height: '45%' },
-  rail: { alignItems: 'center', width: 28 },
-  stopBody: { flex: 1, gap: 4, paddingBottom: 18 },
-  stopMeta: { alignItems: 'center', flexDirection: 'row', gap: 10 },
-  stopRow: { flexDirection: 'row', gap: 12 },
-  stopTitle: { alignItems: 'center', flexDirection: 'row', gap: 8 },
-  summary: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  kindRow: { alignItems: 'center', flexDirection: 'row', gap: 4 },
+  map: { borderRadius: 16, height: 280, overflow: 'hidden' },
+  stop: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  summary: { flexDirection: 'row', gap: 12 },
 });

@@ -1,4 +1,5 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
+import type { AccountType } from '@instasupply/shared';
 import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { StyleSheet, View, type TextInputInstance } from 'react-native';
@@ -10,19 +11,24 @@ import { AuthScaffold } from '@/features/session/components/AuthScaffold';
 import { AuthSwitch } from '@/features/session/components/AuthSwitch';
 import { FormInput } from '@/features/session/components/FormInput';
 import { PasswordStrength } from '@/features/session/components/PasswordStrength';
+import { AccountTypeChips, DealsOptIn } from '@/features/session/components/SignUpExtras';
 import { validateSignUp, type FieldErrors, type SignUpForm } from '@/features/session/components/validation';
 import { spacing } from '@/theme/tokens';
 
 export default function SignUpScreen() {
   const [form, setForm] = useState<SignUpForm>(() => ({
     name: '',
+    companyName: '',
     email: getDraftEmail(),
     phone: '',
     password: '',
   }));
+  const [accountType, setAccountType] = useState<AccountType | null>(null);
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [errors, setErrors] = useState<FieldErrors<keyof SignUpForm>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const companyRef = useRef<TextInputInstance>(null);
   const emailRef = useRef<TextInputInstance>(null);
   const phoneRef = useRef<TextInputInstance>(null);
   const passwordRef = useRef<TextInputInstance>(null);
@@ -46,7 +52,7 @@ export default function SignUpScreen() {
     setBusy(true);
     try {
       // The session shows "Setting up your account" while the profile is being created.
-      await createAccount(result.value);
+      await createAccount({ ...result.value, accountType, marketingOptIn });
       // The router continues to phone verification once the profile exists.
     } catch (error) {
       // If the account was created but its profile was not, /complete-profile shows this too.
@@ -80,8 +86,22 @@ export default function SignUpScreen() {
           error={errors.name}
           autoCapitalize="words"
           autoComplete="name"
+          onSubmitEditing={() => companyRef.current?.focus()}
+        />
+        <FormInput
+          {...field}
+          ref={companyRef}
+          icon="briefcase"
+          placeholder="Company (optional)"
+          value={form.companyName}
+          onChangeText={edit('companyName')}
+          error={errors.companyName}
+          autoCapitalize="words"
+          autoComplete="organization"
+          maxLength={80}
           onSubmitEditing={() => emailRef.current?.focus()}
         />
+        <AccountTypeChips value={accountType} onChange={setAccountType} disabled={busy} />
         <FormInput
           {...field}
           ref={emailRef}
@@ -127,6 +147,7 @@ export default function SignUpScreen() {
           onSubmitEditing={() => void submit()}
         />
         <PasswordStrength password={form.password} />
+        <DealsOptIn value={marketingOptIn} onChange={setMarketingOptIn} disabled={busy} />
       </View>
       <Button label="Sign up" loading={busy} onPress={() => void submit()} />
       <AuthSwitch prompt="Already have an account?" action="Login" onPress={() => router.replace('/login')} />

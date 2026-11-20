@@ -1,19 +1,31 @@
-import { formatDate, isValidEmail, type StaffRole } from '@instasupply/shared';
+import { formatDateTimeET, isValidEmail, type StaffRole } from '@instasupply/shared';
 import { useState } from 'react';
 
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { CopyField } from '@/components/ui/CopyField';
 import { Callout, EmptyState, ErrorState, PageSpinner } from '@/components/ui/Feedback';
-import { Field, Segmented, TextInput } from '@/components/ui/Form';
-import { CopyIcon, InviteIcon, KeyIcon, UsersIcon } from '@/components/ui/icons';
+import { Field, Segmented, TextArea, TextInput } from '@/components/ui/Form';
+import {
+  ApproveIcon,
+  ChevronDownIcon,
+  ErrorIcon,
+  InviteIcon,
+  KeyIcon,
+  SuspendIcon,
+  UsersIcon,
+} from '@/components/ui/icons';
 import { PageHeader } from '@/components/ui/Layout';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { useSignedInUser } from '@/features/auth/AuthProvider';
-import { useStaff } from '@/lib/data';
-import { call, errorMessage } from '@/lib/firebase/callables';
+import { api, call, errorMessage } from '@/lib/api';
+import { cn } from '@/lib/cn';
+import { useNow, useStaff, type UserRecord } from '@/lib/data';
+
+import { SessionsPanel } from './SessionsPanel';
 
 function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast();
@@ -25,6 +37,7 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [link, setLink] = useState<string | null>(null);
 
   const close = () => {
+    if (busy) return;
     setName('');
     setEmail('');
     setRole('dispatcher');
@@ -34,8 +47,9 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   };
 
   const invite = async () => {
+    if (busy) return;
     if (!name.trim()) return setError('Enter their name.');
-    if (!isValidEmail(email)) return setError('Enter a valid email address.');
+    if (!isValidEmail(email.trim())) return setError('Enter a valid email address.');
     setError(null);
     setBusy(true);
     try {
@@ -54,18 +68,19 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       open={open}
       onClose={close}
       size="sm"
-      title={link ? 'Share the setup link' : 'Invite a teammate'}
+      dismissOnBackdrop={false}
+      title={link ? 'Share the set-up link' : 'Invite a teammate'}
       description={
         link
-          ? 'Send this link to them privately. It lets them choose their own password.'
-          : 'Dispatchers manage deliveries and drivers; admins can also manage the team.'
+          ? 'Send this link to them privately. It lets them choose their own password and works once, for 72 hours.'
+          : 'Dispatchers run deliveries, drivers, orders and support; admins also manage the team, approvals and payouts.'
       }
       footer={
         link ? (
           <Button onClick={close}>Done</Button>
         ) : (
           <>
-            <Button variant="secondary" onClick={close}>
+            <Button variant="secondary" onClick={close} disabled={busy}>
               Cancel
             </Button>
             <Button loading={busy} icon={InviteIcon} onClick={() => void invite()}>
@@ -78,26 +93,18 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       {link ? (
         <div className="space-y-3">
           <Callout tone="success" icon={KeyIcon}>
-            Account created for {email.trim()}.
+            Account created for {email.trim()}. The invite email is on its way too.
           </Callout>
-          <div className="rounded-lg bg-slate-50 p-3 font-mono text-[11px] break-all text-slate-600 ring-1 ring-slate-200">
-            {link}
-          </div>
-          <Button
-            variant="secondary"
-            icon={CopyIcon}
-            onClick={() =>
-              void navigator.clipboard.writeText(link).then(
-                () => toast.success('Link copied'),
-                () => toast.error("Couldn't copy the link"),
-              )
-            }
-          >
-            Copy link
-          </Button>
+          <CopyField value={link} label="Password set-up link" />
         </div>
       ) : (
-        <div className="space-y-4">
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void invite();
+          }}
+        >
           <Field label="Name" required>
             {(id) => (
               <TextInput id={id} value={name} onChange={(event) => setName(event.target.value)} autoFocus />
@@ -125,23 +132,129 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
               ]}
             />
           </div>
-          {error ? <p className="text-sm font-medium text-rose-600">{error}</p> : null}
-        </div>
+          {error ? (
+            <Callout tone="danger" icon={ErrorIcon}>
+              {error}
+            </Callout>
+          ) : null}
+        </form>
       )}
     </Modal>
   );
 }
 
+/** Suspend (reason required) or restore a staff account: `PATCH /users/{uid}/status`, admin only. */
+function StatusDialog({ member, onClose }: { member: UserRecord | null; onClose: () => void }) {
+  const toast = useToast();
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const suspending = member?.status === 'active';
+
+  const close = () => {
+    if (busy) return;
+    setReason('');
+    setError(null);
+    onClose();
+  };
+
+  const confirm = async () => {
+    if (!member || busy) return;
+    if (suspending && !reason.trim()) return setError('Say why, in a few words.');
+    setBusy(true);
+    setError(null);
+    try {
+      await api.users.setStatus(member.uid, {
+        status: suspending ? 'suspended' : 'active',
+        reason: suspending ? reason.trim().slice(0, 200) : null,
+      });
+      toast.success(
+        suspending ? `${member.displayName} was suspended` : `${member.displayName} was restored`,
+      );
+      setBusy(false);
+      setReason('');
+      onClose();
+    } catch (caught) {
+      setBusy(false);
+      setError(errorMessage(caught));
+    }
+  };
+
+  return (
+    <Modal
+      open={!!member}
+      onClose={close}
+      size="sm"
+      title={member ? `${suspending ? 'Suspend' : 'Restore'} ${member.displayName}` : ''}
+      description={
+        suspending
+          ? 'They are signed out of every device at once and cannot sign in until restored. Other admins are told.'
+          : 'They can sign in again with their password.'
+      }
+      footer={
+        <>
+          <Button variant="secondary" onClick={close} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant={suspending ? 'danger' : 'primary'} loading={busy} onClick={() => void confirm()}>
+            {suspending ? 'Suspend' : 'Restore'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {suspending ? (
+          <Field label="Reason" required hint="Kept on their account for the team.">
+            {(id, describedBy) => (
+              <TextArea
+                id={id}
+                aria-describedby={describedBy}
+                rows={3}
+                maxLength={200}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            )}
+          </Field>
+        ) : member?.suspendedReason ? (
+          <p className="text-sm text-slate-600">Suspended because: {member.suspendedReason}</p>
+        ) : null}
+        {error ? (
+          <Callout tone="danger" icon={ErrorIcon}>
+            {error}
+          </Callout>
+        ) : null}
+      </div>
+    </Modal>
+  );
+}
+
+const STATUS_BADGE = {
+  active: { tone: 'success', label: 'Active' },
+  pending: { tone: 'warning', label: 'Invited' },
+  suspended: { tone: 'danger', label: 'Suspended' },
+} as const;
+
 export default function TeamPage() {
+  const now = useNow();
   const { user } = useSignedInUser();
   const staff = useStaff();
   const [inviting, setInviting] = useState(false);
+  const [statusFor, setStatusFor] = useState<UserRecord | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const activeAdmins = staff.data.filter((member) => member.role === 'admin' && member.status === 'active');
+  const members = [...staff.data].sort(
+    (a, b) =>
+      (a.status === 'suspended' ? 1 : 0) - (b.status === 'suspended' ? 1 : 0) ||
+      a.displayName.localeCompare(b.displayName),
+  );
 
   return (
     <>
       <PageHeader
         title="Team"
-        description="People who can use the dispatch console."
+        description="People who can use the ops console. Supplier teams are managed on each store."
         actions={
           <Button icon={InviteIcon} onClick={() => setInviting(true)}>
             Invite teammate
@@ -149,40 +262,82 @@ export default function TeamPage() {
         }
       />
       <Card>
-        {staff.error ? (
-          <ErrorState error={staff.error} className="m-5" />
+        {staff.error && staff.data.length === 0 ? (
+          <ErrorState error={staff.error} onRetry={staff.retry} className="m-5" />
         ) : staff.loading && staff.data.length === 0 ? (
-          <PageSpinner />
+          <PageSpinner label="Loading the team" />
         ) : staff.data.length === 0 ? (
-          <EmptyState icon={UsersIcon} title="No staff yet" />
+          <EmptyState icon={UsersIcon} title="No staff yet" description="Invite your first dispatcher." />
         ) : (
           <ul className="divide-y divide-slate-100">
-            {[...staff.data]
-              .sort((a, b) => a.displayName.localeCompare(b.displayName))
-              .map((member) => (
-                <li key={member.id} className="flex items-center gap-3 px-5 py-3">
-                  <Avatar name={member.displayName} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-900">
-                      {member.displayName}
-                      {member.id === user.uid ? (
-                        <span className="ml-1.5 text-xs font-normal text-slate-400">(you)</span>
-                      ) : null}
-                    </p>
-                    <p className="truncate text-xs text-slate-500">{member.email}</p>
+            {members.map((member) => {
+              const self = member.uid === user.uid;
+              const lastAdmin =
+                member.role === 'admin' && member.status === 'active' && activeAdmins.length <= 1;
+              const badge = STATUS_BADGE[member.status];
+              const open = expanded === member.uid;
+              return (
+                <li key={member.id} className="px-5 py-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Avatar name={member.displayName} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-slate-900">
+                        {member.displayName}
+                        {self ? (
+                          <span className="ml-1.5 text-xs font-normal text-slate-400">(you)</span>
+                        ) : null}
+                      </p>
+                      <p className="truncate text-xs text-slate-500">
+                        {member.email}
+                        {member.createdAt ? ` · joined ${formatDateTimeET(member.createdAt, now)}` : ''}
+                      </p>
+                    </div>
+                    <Badge tone={member.role === 'admin' ? 'brand' : 'neutral'}>
+                      {member.role === 'admin' ? 'Admin' : 'Dispatcher'}
+                    </Badge>
+                    <Badge tone={badge.tone}>{badge.label}</Badge>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      trailingIcon={ChevronDownIcon}
+                      aria-expanded={open}
+                      onClick={() => setExpanded(open ? null : member.uid)}
+                    >
+                      Devices
+                    </Button>
+                    {member.status !== 'pending' ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon={member.status === 'active' ? SuspendIcon : ApproveIcon}
+                        disabled={self || lastAdmin}
+                        title={
+                          self
+                            ? 'You cannot change your own access.'
+                            : lastAdmin
+                              ? 'At least one administrator must stay active.'
+                              : undefined
+                        }
+                        onClick={() => setStatusFor(member)}
+                      >
+                        {member.status === 'active' ? 'Suspend' : 'Restore'}
+                      </Button>
+                    ) : null}
                   </div>
-                  <span className="hidden text-xs text-slate-400 sm:block">
-                    Joined {formatDate(member.createdAt)}
-                  </span>
-                  <Badge tone={member.role === 'admin' ? 'brand' : 'neutral'}>
-                    {member.role === 'admin' ? 'Admin' : 'Dispatcher'}
-                  </Badge>
+                  {member.status === 'suspended' && member.suspendedReason ? (
+                    <p className="mt-1 pl-12 text-xs text-rose-700">Suspended: {member.suspendedReason}</p>
+                  ) : null}
+                  <div className={cn('mt-3 rounded-xl bg-slate-50 p-3 pl-4', open ? 'block' : 'hidden')}>
+                    {open ? <SessionsPanel uid={member.uid} name={member.displayName} self={self} /> : null}
+                  </div>
                 </li>
-              ))}
+              );
+            })}
           </ul>
         )}
       </Card>
       <InviteModal open={inviting} onClose={() => setInviting(false)} />
+      <StatusDialog member={statusFor} onClose={() => setStatusFor(null)} />
     </>
   );
 }

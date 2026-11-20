@@ -1,6 +1,6 @@
 import type { SessionStatus } from './SessionProvider';
 
-/** Where each session state belongs; used as the redirect target for protected routes. */
+/** Where each session state belongs; used as the redirect target of the protected route groups. */
 export function homeHref(status: SessionStatus) {
   switch (status) {
     case 'signed_out':
@@ -14,6 +14,7 @@ export function homeHref(status: SessionStatus) {
     case 'suspended':
     case 'staff_account':
     case 'shopper_account':
+    case 'supplier_account':
       return '/onboarding/account' as const;
     default:
       return '/' as const;

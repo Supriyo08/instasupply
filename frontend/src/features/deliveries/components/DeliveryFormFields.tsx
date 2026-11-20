@@ -14,7 +14,10 @@ const PRIORITY_OPTIONS: { value: Priority; label: string }[] = [
   { value: 'urgent', label: 'Urgent' },
 ];
 
-/** Customer, drop-off and package fields shared by the create and edit dialogs. */
+/**
+ * Site contact, drop-off and load fields shared by the create and edit dialogs of a manual delivery.
+ * Payment is by card at checkout for marketplace orders; manual deliveries carry no cash amount.
+ */
 export function DeliveryFormFields({
   draft,
   errors,
@@ -24,25 +27,29 @@ export function DeliveryFormFields({
   errors: DraftErrors;
   onChange: (patch: Partial<DeliveryDraft>) => void;
 }) {
-  const setLocation = useCallback((location: LatLng) => onChange({ location }), [onChange]);
+  const setLocation = useCallback(
+    (location: LatLng, label?: string | null) => onChange({ location, locationLabel: label ?? null }),
+    [onChange],
+  );
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <div className="space-y-4">
-        <Field label="Customer name" required error={errors.customerName}>
+        <Field label="Site contact" required error={errors.customerName}>
           {(id) => (
             <TextInput
               id={id}
               value={draft.customerName}
               invalid={!!errors.customerName}
               onChange={(event) => onChange({ customerName: event.target.value })}
-              placeholder="Asha Rao"
+              placeholder="Dana Whitfield"
+              autoComplete="off"
               autoFocus
             />
           )}
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Phone" error={errors.customerPhone} hint="Used for the live tracking SMS.">
+          <Field label="Phone" error={errors.customerPhone} hint="Gets the live tracking text.">
             {(id, describedBy) => (
               <TextInput
                 id={id}
@@ -51,7 +58,7 @@ export function DeliveryFormFields({
                 value={draft.customerPhone}
                 invalid={!!errors.customerPhone}
                 onChange={(event) => onChange({ customerPhone: event.target.value })}
-                placeholder="+91 98765 43210"
+                placeholder="416-555-0142"
               />
             )}
           </Field>
@@ -63,23 +70,23 @@ export function DeliveryFormFields({
                 value={draft.customerEmail}
                 invalid={!!errors.customerEmail}
                 onChange={(event) => onChange({ customerEmail: event.target.value })}
-                placeholder="asha@example.com"
+                placeholder="site@whitfieldreno.ca"
               />
             )}
           </Field>
         </div>
-        <Field label="Address" required error={errors.address}>
+        <Field label="Jobsite address" required error={errors.address}>
           {(id) => (
             <TextInput
               id={id}
               value={draft.address}
               invalid={!!errors.address}
               onChange={(event) => onChange({ address: event.target.value })}
-              placeholder="12, 80 Feet Rd, Koramangala, Bengaluru"
+              placeholder="1200 Queen St E, Toronto, ON M4M 1L5"
             />
           )}
         </Field>
-        <Field label="Directions for the driver" hint="Gate, floor, landmark…">
+        <Field label="Directions for the driver" hint="Gate code, where to unload, who to ask for…">
           {(id, describedBy) => (
             <TextInput
               id={id}
@@ -90,59 +97,48 @@ export function DeliveryFormFields({
           )}
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Packages" error={errors.packageCount}>
-            {(id) => (
+          <Field label="Pieces" error={errors.packageCount} hint="Bundles, boxes or loose pieces.">
+            {(id, describedBy) => (
               <TextInput
                 id={id}
                 type="number"
                 min={1}
                 max={99}
+                aria-describedby={describedBy}
                 value={draft.packageCount}
                 invalid={!!errors.packageCount}
                 onChange={(event) => onChange({ packageCount: event.target.value })}
               />
             )}
           </Field>
-          <Field label="Cash on delivery (₹)" error={errors.codAmount} hint="Leave empty if prepaid.">
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium text-slate-700">Priority</p>
+            <Segmented
+              ariaLabel="Priority"
+              value={draft.priority}
+              options={PRIORITY_OPTIONS}
+              onChange={(priority) => onChange({ priority })}
+            />
+          </div>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Window starts" hint="Toronto time.">
             {(id, describedBy) => (
               <TextInput
                 id={id}
-                type="number"
-                min={0}
-                step="0.01"
-                aria-describedby={describedBy}
-                value={draft.codAmount}
-                invalid={!!errors.codAmount}
-                onChange={(event) => onChange({ codAmount: event.target.value })}
-              />
-            )}
-          </Field>
-        </div>
-        <div className="space-y-1.5">
-          <p className="text-sm font-medium text-slate-700">Priority</p>
-          <Segmented
-            ariaLabel="Priority"
-            value={draft.priority}
-            options={PRIORITY_OPTIONS}
-            onChange={(priority) => onChange({ priority })}
-          />
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Window starts">
-            {(id) => (
-              <TextInput
-                id={id}
                 type="datetime-local"
+                aria-describedby={describedBy}
                 value={draft.windowStart}
                 onChange={(event) => onChange({ windowStart: event.target.value })}
               />
             )}
           </Field>
-          <Field label="Deliver by" error={errors.windowEnd}>
-            {(id) => (
+          <Field label="Deliver by" error={errors.windowEnd} hint="Toronto time.">
+            {(id, describedBy) => (
               <TextInput
                 id={id}
                 type="datetime-local"
+                aria-describedby={describedBy}
                 value={draft.windowEnd}
                 invalid={!!errors.windowEnd}
                 onChange={(event) => onChange({ windowEnd: event.target.value })}
@@ -154,7 +150,7 @@ export function DeliveryFormFields({
           checked={draft.requireCode}
           onChange={(requireCode) => onChange({ requireCode })}
           label="Require hand-off code"
-          description="The customer sees a 4-digit code on their tracking page; the driver must enter it to complete."
+          description="The site contact sees a 4-digit code on their tracking page; the driver enters it to complete."
         />
         <Field label="Internal notes" hint="Visible to dispatch and the assigned driver.">
           {(id, describedBy) => (
@@ -172,6 +168,7 @@ export function DeliveryFormFields({
       <LocationPicker
         address={draft.address}
         location={draft.location}
+        locationLabel={draft.locationLabel}
         onLocationChange={setLocation}
         onAddressSuggestion={(label) => {
           if (!draft.address.trim()) onChange({ address: label });

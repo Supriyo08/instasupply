@@ -1,23 +1,33 @@
-import { formatRelativeTime, pluralize } from '@instasupply/shared';
+import {
+  formatRelativeTime,
+  pluralize,
+  type Issue,
+  type JobOffer,
+  type Order,
+  type Quote,
+  type StoreOrder,
+} from '@instasupply/shared';
 import { Link } from 'react-router';
 
 import { Avatar } from '@/components/ui/Avatar';
 import { Card, CardHeader } from '@/components/ui/Card';
-import { EmptyState } from '@/components/ui/Feedback';
+import { formatCountdown } from '@/components/ui/Countdown';
 import {
+  CardIcon,
   ChevronRightIcon,
+  ClockIcon,
   FailedIcon,
-  SparklesIcon,
-  UrgentIcon,
-  WarningIcon,
+  IssueIcon,
+  JobsIcon,
+  QuoteIcon,
   type IconComponent,
 } from '@/components/ui/icons';
+import { SceneEmpty } from '@/features/deliveries/components/SceneArt';
+import type { DriverRow } from '@/features/live-map/DriverList';
 import { cn } from '@/lib/cn';
-import { presenceOf, type DeliveryRecord, type DriverRecord } from '@/lib/data';
+import { presenceOf, type DriverRecord } from '@/lib/data';
 
-import type { DriverRow } from '../live-map/DriverList';
-
-interface Item {
+export interface AttentionItem {
   key: string;
   to: string;
   icon?: IconComponent;
@@ -33,101 +43,237 @@ const TONE = {
   info: 'bg-brand-50 text-brand-600',
 };
 
-export function buildAttentionItems(input: {
-  open: DeliveryRecord[];
-  failedToday: DeliveryRecord[];
+/** At most this many rows per kind; a "see all" row links to the full list. */
+const PER_KIND = 3;
+const UNCLAIMED_MS = 15 * 60_000;
+const QUOTE_SOON_MS = 10 * 60_000;
+
+export interface AttentionInput {
+  overdue: StoreOrder[];
+  overdueCount: number;
+  failed: StoreOrder[];
+  failedCount: number;
+  offers: (JobOffer & { id: string })[];
+  issues: Issue[];
+  quotes: Quote[];
+  captureFailures: Order[];
+  captureFailureCount: number;
   pendingDrivers: DriverRecord[];
   fleet: DriverRow[];
   now: number;
-}): Item[] {
-  const items: Item[] = [];
-  for (const delivery of input.failedToday.slice(0, 3)) {
+}
+
+function more(
+  items: AttentionItem[],
+  total: number,
+  shown: number,
+  item: Omit<AttentionItem, 'title'> & { noun: string },
+) {
+  if (total > shown) {
+    items.push({ ...item, title: `${total - shown} more ${item.noun}`, key: `${item.key}-more` });
+  }
+}
+
+/**
+ * The exceptions of MARKETPLACE §9 "Needs attention": overdue acceptances, failed deliveries, unclaimed
+ * job offers, issues past SLA, quotes near their reply deadline and card capture failures, plus drivers
+ * who lost signal with a load and sign-ups waiting for approval. Every list is the server's (never a
+ * capped client list), and the counts come from `GET /ops/dashboard` (R47, R48, R54).
+ */
+export function buildAttentionItems(input: AttentionInput): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  const { now } = input;
+
+  input.overdue.slice(0, PER_KIND).forEach((order) =>
     items.push({
-      key: `failed-${delivery.id}`,
-      to: `/deliveries/${delivery.id}`,
+      key: `overdue-${order.id}`,
+      to: `/orders/${order.orderId}`,
+      icon: ClockIcon,
+      tone: 'danger',
+      title: `${order.storeName} hasn't accepted ${order.number}`,
+      detail: `Due ${formatRelativeTime(order.timing.respondBy, now)} · ${order.companyName ?? order.customerName}`,
+    }),
+  );
+  more(items, Math.max(input.overdueCount, input.overdue.length), Math.min(PER_KIND, input.overdue.length), {
+    key: 'overdue',
+    to: '/orders?tab=store-orders',
+    icon: ClockIcon,
+    tone: 'danger',
+    detail: 'Store orders past their acceptance deadline',
+    noun: 'overdue acceptances',
+  });
+
+  input.failed.slice(0, PER_KIND).forEach((order) =>
+    items.push({
+      key: `failed-${order.id}`,
+      to: order.deliveryId ? `/deliveries/${order.deliveryId}` : `/orders/${order.orderId}`,
       icon: FailedIcon,
       tone: 'danger',
-      title: `${delivery.orderId} failed`,
-      detail: `${delivery.customer.name} · reassign to retry`,
-    });
-  }
-  for (const delivery of input.open
-    .filter((item) => item.status === 'unassigned' && item.declinedBy?.length)
-    .slice(0, 3)) {
-    items.push({
-      key: `declined-${delivery.id}`,
-      to: `/deliveries/${delivery.id}`,
-      icon: WarningIcon,
-      tone: 'warning',
-      title: `${delivery.orderId} was declined`,
-      detail: `Declined ${delivery.declinedBy!.length}× · needs a new driver`,
-    });
-  }
-  const urgent = input.open.filter(
-    (item) => item.priority === 'urgent' && ['unassigned', 'assigned'].includes(item.status),
+      title: `Delivery of ${order.number} failed`,
+      detail: `${order.storeName} → ${order.jobsite?.areaLabel ?? 'site'} · re-attempt or return to the store`,
+    }),
   );
-  for (const delivery of urgent.slice(0, 3)) {
+  more(items, Math.max(input.failedCount, input.failed.length), Math.min(PER_KIND, input.failed.length), {
+    key: 'failed',
+    to: '/deliveries?tab=failed',
+    icon: FailedIcon,
+    tone: 'danger',
+    detail: 'Failed deliveries waiting for a decision',
+    noun: 'failed deliveries',
+  });
+
+  const unclaimed = input.offers
+    .filter((offer) => offer.status === 'open' && now - (offer.openedAt ?? offer.opensAt) > UNCLAIMED_MS)
+    .sort((a, b) => (a.openedAt ?? a.opensAt) - (b.openedAt ?? b.opensAt));
+  unclaimed.slice(0, PER_KIND).forEach((offer) =>
     items.push({
-      key: `urgent-${delivery.id}`,
-      to: `/deliveries/${delivery.id}`,
-      icon: UrgentIcon,
+      key: `offer-${offer.id}`,
+      to: '/jobs',
+      icon: JobsIcon,
+      tone: 'warning',
+      title: `Nobody has claimed ${offer.storeOrderNumber}`,
+      detail: `${offer.pickup.storeName} → ${offer.dropoff.areaLabel} · open ${formatRelativeTime(offer.openedAt ?? offer.opensAt, now).replace(' ago', '')}`,
+    }),
+  );
+  more(items, unclaimed.length, Math.min(PER_KIND, unclaimed.length), {
+    key: 'offers',
+    to: '/jobs',
+    icon: JobsIcon,
+    tone: 'warning',
+    detail: 'Open on the job board for more than 15 minutes',
+    noun: 'unclaimed jobs',
+  });
+
+  const lateIssues = input.issues.filter((issue) => issue.slaDueAt < now);
+  lateIssues.slice(0, PER_KIND).forEach((issue) =>
+    items.push({
+      key: `issue-${issue.id}`,
+      to: `/issues/${issue.id}`,
+      icon: IssueIcon,
       tone: 'danger',
-      title: `Urgent ${delivery.orderId} not started`,
-      detail: delivery.driverName ? `Waiting for ${delivery.driverName} to accept` : 'No driver assigned',
+      title: `${issue.number} is past its reply time`,
+      detail: `${issue.storeName} · ${issue.customerName} · due ${formatRelativeTime(issue.slaDueAt, now)}`,
+    }),
+  );
+  more(items, lateIssues.length, Math.min(PER_KIND, lateIssues.length), {
+    key: 'issues',
+    to: '/issues',
+    icon: IssueIcon,
+    tone: 'danger',
+    detail: 'Issues past their service level',
+    noun: 'issues past SLA',
+  });
+
+  const soonQuotes = input.quotes
+    .filter((quote) => quote.respondBy - now < QUOTE_SOON_MS)
+    .sort((a, b) => a.respondBy - b.respondBy);
+  soonQuotes.slice(0, PER_KIND).forEach((quote) => {
+    const left = quote.respondBy - now;
+    items.push({
+      key: `quote-${quote.id}`,
+      to: `/quotes/${quote.id}`,
+      icon: QuoteIcon,
+      tone: left <= 0 ? 'danger' : 'warning',
+      title:
+        left <= 0
+          ? `Quote ${quote.number} is overdue`
+          : `Quote ${quote.number} due in ${formatCountdown(left)}`,
+      detail: `${quote.companyName ?? quote.customerName}${quote.assignedTo ? '' : ' · not assigned'}`,
     });
-  }
+  });
+  more(items, soonQuotes.length, Math.min(PER_KIND, soonQuotes.length), {
+    key: 'quotes',
+    to: '/quotes',
+    icon: QuoteIcon,
+    tone: 'warning',
+    detail: 'Quotes near their reply deadline',
+    noun: 'quotes due soon',
+  });
+
+  input.captureFailures.slice(0, PER_KIND).forEach((order) =>
+    items.push({
+      key: `capture-${order.id}`,
+      to: `/orders/${order.id}`,
+      icon: CardIcon,
+      tone: 'danger',
+      title: `Card capture failed for ${order.number}`,
+      detail: `${order.companyName ?? order.customerName} · retried every 30 minutes`,
+    }),
+  );
+  more(
+    items,
+    Math.max(input.captureFailureCount, input.captureFailures.length),
+    Math.min(PER_KIND, input.captureFailures.length),
+    {
+      key: 'captures',
+      to: '/orders',
+      icon: CardIcon,
+      tone: 'danger',
+      detail: 'Orders whose card could not be charged',
+      noun: 'capture failures',
+    },
+  );
+
   for (const row of input.fleet) {
-    const live = row.active.some((delivery) =>
+    const carrying = row.active.some((delivery) =>
       ['picked_up', 'in_transit', 'arrived'].includes(delivery.status),
     );
-    if (live && presenceOf(row.location, input.now) !== 'online') {
+    if (carrying && presenceOf(row.location, now) !== 'online') {
       items.push({
         key: `stale-${row.driver.id}`,
         to: `/drivers/${row.driver.id}`,
         avatar: row.driver.displayName,
         tone: 'warning',
-        title: `${row.driver.displayName} lost signal`,
-        detail: `Carrying ${pluralize(row.active.length, 'stop')} · last seen ${formatRelativeTime(row.location?.updatedAt, input.now)}`,
+        title: `${row.driver.displayName} lost signal with a load`,
+        detail: `${pluralize(row.active.length, 'job')} · last seen ${formatRelativeTime(row.location?.updatedAt, now)}`,
       });
     }
   }
-  for (const driver of input.pendingDrivers.slice(0, 3)) {
+
+  input.pendingDrivers.slice(0, PER_KIND).forEach((driver) =>
     items.push({
       key: `pending-${driver.id}`,
       to: `/drivers/${driver.id}`,
       avatar: driver.displayName,
       tone: 'info',
       title: `${driver.displayName} is waiting for approval`,
-      detail: driver.vehicle ? `${driver.vehicle.type} · ${driver.vehicle.plate}` : 'New driver sign-up',
-    });
-  }
-  const unassigned = input.open.filter((item) => item.status === 'unassigned').length;
-  if (unassigned > 0) {
-    items.push({
-      key: 'unassigned',
-      to: '/deliveries?tab=unassigned',
-      icon: WarningIcon,
-      tone: 'warning',
-      title: `${unassigned} deliver${unassigned === 1 ? 'y' : 'ies'} unassigned`,
-      detail: 'Assign them to available drivers',
-    });
-  }
+      detail: driver.vehicle
+        ? `${driver.vehicle.make} ${driver.vehicle.model} · ${driver.vehicle.plate}`
+        : 'New driver sign-up',
+    }),
+  );
   return items;
 }
 
-export function NeedsAttention({ items }: { items: Item[] }) {
+export function NeedsAttention({
+  items,
+  loading,
+  error,
+}: {
+  items: AttentionItem[];
+  loading: boolean;
+  error: boolean;
+}) {
   return (
     <Card className="flex flex-col">
-      <CardHeader title="Needs attention" description="Exceptions that need a dispatcher." />
+      <CardHeader title="Needs attention" description="Exceptions a dispatcher should handle now." />
       {items.length === 0 ? (
-        <EmptyState
-          icon={SparklesIcon}
-          title="All clear"
-          description="No exceptions right now."
-          className="flex-1 py-10"
-        />
+        loading ? (
+          <p className="px-5 py-8 text-center text-sm text-slate-500">Checking for exceptions…</p>
+        ) : error ? (
+          <p className="px-5 py-8 text-center text-sm text-rose-600">
+            Some lists couldn't load. The counts above are still live.
+          </p>
+        ) : (
+          <SceneEmpty
+            artKey="scene-order-confirmed"
+            title="All clear"
+            description="No late acceptances, failed deliveries or stuck jobs right now."
+            className="flex-1"
+          />
+        )
       ) : (
-        <ul className="divide-y divide-slate-100 overflow-y-auto">
+        <ul className="max-h-[32rem] divide-y divide-slate-100 overflow-y-auto">
           {items.map((item) => (
             <li key={item.key}>
               <Link to={item.to} className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50">
@@ -148,6 +294,9 @@ export function NeedsAttention({ items }: { items: Item[] }) {
           ))}
         </ul>
       )}
+      {items.length > 0 && error ? (
+        <p className="border-t border-slate-100 px-5 py-2 text-xs text-rose-600">Some lists couldn't load.</p>
+      ) : null}
     </Card>
   );
 }

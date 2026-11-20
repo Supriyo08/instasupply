@@ -1,10 +1,12 @@
 /**
  * `create-admin --email <e> --name <n>` (docs/PLATFORM.md §2.6, §6.3.8 without an inviter): creates the
  * admin when the email is free and prints a fresh one-time set-password link, to standard output only.
+ * For an admin that already has a password, the password is cleared and every session signed out.
  */
 import { isValidEmail } from '@instasupply/shared';
 import type { Config } from '../config/env';
 import { createDeps } from '../container';
+import { revokeAllSessions } from '../platform/auth/sessions';
 import { withTransaction } from '../platform/db/tx';
 import { ApiError } from '../platform/http/errors';
 import { inviteUser } from '../modules/auth/account.service';
@@ -36,6 +38,9 @@ export async function runCreateAdmin(config: Config, args: string[]): Promise<nu
           [email],
         );
         await tx.query('UPDATE users SET password_hash = NULL WHERE id = $1', [ids[0]!.id]);
+        // Recovery usually means the account may be compromised: every signed-in device, an attacker's
+        // included, must sign in again, as after a password reset (§6.3.7).
+        await revokeAllSessions(tx, ids[0]!.id, 'password_reset');
       }
       return inviteUser(tx, config, {
         email,

@@ -1,18 +1,13 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_USE_EMULATORS?: string;
-  readonly VITE_FIREBASE_API_KEY?: string;
-  readonly VITE_FIREBASE_AUTH_DOMAIN?: string;
-  readonly VITE_FIREBASE_PROJECT_ID?: string;
-  readonly VITE_FIREBASE_STORAGE_BUCKET?: string;
-  readonly VITE_FIREBASE_MESSAGING_SENDER_ID?: string;
-  readonly VITE_FIREBASE_APP_ID?: string;
-  readonly VITE_FUNCTIONS_REGION?: string;
-  readonly VITE_MAP_TILE_URL?: string;
-  readonly VITE_MAP_ATTRIBUTION?: string;
+  /** Origin of the API, `https://host[:port]` (docs/CLIENTS.md §8.3). Required by `vite build`. */
+  readonly VITE_API_URL?: string;
 }
 
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** `version` of frontend/package.json, defined in vite.config.ts. */
+declare const __APP_VERSION__: string;

@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 import { cn } from '@/lib/cn';
 
 import { IconButton } from './Button';
+import { useTopDialog } from './dialog-stack';
 import { CloseIcon, ErrorIcon, InfoIcon, SuccessIcon } from './icons';
 
 type ToastTone = 'success' | 'error' | 'info';
@@ -30,6 +32,8 @@ const ICON_COLORS = { success: 'text-emerald-500', error: 'text-rose-500', info:
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const nextId = useRef(1);
+  // While a modal is open the page outside it is inert: render the toasts inside the innermost dialog.
+  const topDialog = useTopDialog();
 
   const dismiss = useCallback((id: number) => {
     setToasts((current) => current.filter((toast) => toast.id !== id));
@@ -54,45 +58,49 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [show],
   );
 
+  const region = (
+    <div
+      aria-live="polite"
+      className="pointer-events-none fixed inset-x-4 bottom-4 z-[2000] flex flex-col items-end gap-2 sm:left-auto sm:w-96"
+    >
+      {toasts.map((toast) => {
+        const Icon = ICONS[toast.tone];
+        return (
+          <div
+            key={toast.id}
+            role={toast.tone === 'error' ? 'alert' : 'status'}
+            className="pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-xl bg-white p-3.5 text-left shadow-pop ring-1 ring-slate-200"
+          >
+            <Icon size={18} className={cn('mt-0.5 shrink-0', ICON_COLORS[toast.tone])} aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-slate-900">{toast.title}</p>
+              {toast.description ? (
+                <p className="mt-0.5 text-sm text-slate-600">{toast.description}</p>
+              ) : null}
+              {toast.action ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.action?.onClick();
+                    dismiss(toast.id);
+                  }}
+                  className="mt-1.5 text-sm font-semibold text-brand-600 hover:text-brand-700"
+                >
+                  {toast.action.label}
+                </button>
+              ) : null}
+            </div>
+            <IconButton icon={CloseIcon} label="Dismiss" size="sm" onClick={() => dismiss(toast.id)} />
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div
-        aria-live="polite"
-        className="pointer-events-none fixed inset-x-4 bottom-4 z-[2000] flex flex-col items-end gap-2 sm:left-auto sm:w-96"
-      >
-        {toasts.map((toast) => {
-          const Icon = ICONS[toast.tone];
-          return (
-            <div
-              key={toast.id}
-              role={toast.tone === 'error' ? 'alert' : 'status'}
-              className="pointer-events-auto flex w-full animate-slide-up items-start gap-3 rounded-xl bg-white p-3.5 shadow-pop ring-1 ring-slate-200"
-            >
-              <Icon size={18} className={cn('mt-0.5 shrink-0', ICON_COLORS[toast.tone])} aria-hidden />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-slate-900">{toast.title}</p>
-                {toast.description ? (
-                  <p className="mt-0.5 text-sm text-slate-600">{toast.description}</p>
-                ) : null}
-                {toast.action ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      toast.action?.onClick();
-                      dismiss(toast.id);
-                    }}
-                    className="mt-1.5 text-sm font-semibold text-brand-600 hover:text-brand-700"
-                  >
-                    {toast.action.label}
-                  </button>
-                ) : null}
-              </div>
-              <IconButton icon={CloseIcon} label="Dismiss" size="sm" onClick={() => dismiss(toast.id)} />
-            </div>
-          );
-        })}
-      </div>
+      {topDialog ? createPortal(region, topDialog) : region}
     </ToastContext.Provider>
   );
 }

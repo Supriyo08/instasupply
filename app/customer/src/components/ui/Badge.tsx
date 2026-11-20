@@ -10,6 +10,9 @@ const TONES = {
   brand: { bg: colors.primarySoft, fg: colors.primaryDark },
   info: { bg: colors.infoSoft, fg: colors.info },
   neutral: { bg: colors.background, fg: colors.textMuted },
+  success: { bg: colors.primarySoft, fg: colors.primaryDark },
+  warning: { bg: colors.warningSoft, fg: colors.warning },
+  danger: { bg: colors.dangerSoft, fg: colors.danger },
 } as const;
 
 /** Small uppercase pill. It aligns itself to the start; pass `style` (e.g. alignSelf) to change that. */

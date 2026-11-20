@@ -4,7 +4,7 @@ import { NoImageIcon } from '@/components/ui/icons';
 import { cn } from '@/lib/cn';
 
 import { artSrc } from '../art';
-import { normalizeHex } from '../category-form';
+import { normalizeHex } from '../colors';
 
 const SIZES = {
   sm: { box: 'size-10', icon: 16 },

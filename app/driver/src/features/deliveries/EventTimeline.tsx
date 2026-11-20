@@ -1,11 +1,13 @@
-import { formatDateTime, type DeliveryEvent } from '@instasupply/shared';
+import { formatDateTimeET, type DeliveryEvent } from '@instasupply/shared';
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
+import { useNow } from '@/lib/use-now';
 import { useTheme } from '@/theme/ThemeProvider';
 
 export function EventTimeline({ events }: { events: DeliveryEvent[] }) {
   const { colors } = useTheme();
+  const now = useNow();
   if (events.length === 0) {
     return (
       <Text variant="caption" color="subtle">
@@ -26,7 +28,7 @@ export function EventTimeline({ events }: { events: DeliveryEvent[] }) {
           <View style={styles.content}>
             <Text variant={index === 0 ? 'bodyStrong' : 'body'}>{event.message}</Text>
             <Text variant="caption" color="subtle">
-              {formatDateTime(event.at)}
+              {formatDateTimeET(event.at, now)}
               {event.actorName && event.actorRole !== 'system' ? ` · ${event.actorName}` : ''}
             </Text>
           </View>

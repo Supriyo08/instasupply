@@ -1,16 +1,22 @@
 /**
- * WAVE-2 PLACEHOLDER written by the platform workstream (docs/PLATFORM.md §15 rule 1). The owner is `store-orders`
- * (§15.2), who replaces the bodies; the exported names and signatures are the frozen ones of §9.1, so other
- * modules compile against them today. Every body throws ApiError('internal', 'not implemented').
+ * The pickup PIN (MARKETPLACE §5.5.2, D8). Each store order owns its own PIN, kept in the private `meta`
+ * column: the store that types it never sees it. A new PIN resets the attempts, and `pickupCodeIssuedTo`
+ * records who may use it, so a released driver's PIN stops working (`completePickup` checks it).
  */
 import type { Tx } from '../../platform/db/tx';
-import { notImplemented } from '../../platform/http/errors';
+import { newPickupCode } from '../../platform/ids';
+import { patchMeta } from './store-orders.repository';
+
+/** Wrong PINs before the counter locks (only staff can then complete, with an override). */
+export const MAX_PICKUP_CODE_ATTEMPTS = 5;
 
 /** New 4-digit PIN, attempts reset. */
 export async function stagePickupCode(
-  _tx: Tx,
-  _storeOrderId: string,
-  _issuedTo: 'customer' | string,
+  tx: Tx,
+  storeOrderId: string,
+  issuedTo: 'customer' | string,
 ): Promise<string> {
-  return notImplemented('stagePickupCode');
+  const pickupCode = newPickupCode();
+  await patchMeta(tx, storeOrderId, { pickupCode, pickupCodeIssuedTo: issuedTo, codeAttempts: 0 });
+  return pickupCode;
 }

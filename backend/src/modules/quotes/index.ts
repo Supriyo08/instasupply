@@ -1,16 +1,18 @@
 /**
- * WAVE-2 PLACEHOLDER written by the platform workstream (docs/PLATFORM.md §15 rule 1). The owner is `quotes-issues`
- * (§15.2), who replaces the bodies; the exported names and signatures are the frozen ones of §9.1, so other
- * modules compile against them today. Its commands answer internal "not implemented" until the owner registers them with defineCommand.
+ * modules/quotes (docs/PLATFORM.md §2.1, §5.2, §5.3.7, §9.2.10, §9.5; owner `quotes-issues`, §15.2): material
+ * lists, the quote builder's offers, accepting an offer into an order, closing, reopening, the private
+ * workspace, and the `expireQuotes` job. It owns no §9.1 helper.
  */
 import type { FastifyInstance } from 'fastify';
 import type { Deps } from '../../container';
-import { defineStubCommand } from '../../platform/http/command';
+import { registerJob } from '../../platform/scheduler/registry';
+import { runExpireQuotes } from './expire-quotes';
+import { registerQuoteCommands, registerQuoteRoutes } from './routes';
 
-export function register(_app: FastifyInstance, _deps: Deps): void {
-  defineStubCommand('submitMaterialList', 'quotes-issues');
-  defineStubCommand('sendQuote', 'quotes-issues');
-  defineStubCommand('acceptQuote', 'quotes-issues');
-  defineStubCommand('closeQuote', 'quotes-issues');
-  defineStubCommand('reopenQuote', 'quotes-issues');
+export { runExpireQuotes } from './expire-quotes';
+
+export function register(app: FastifyInstance, _deps: Deps): void {
+  registerQuoteCommands();
+  registerQuoteRoutes(app);
+  registerJob({ name: 'expireQuotes', schedule: { everyMs: 15 * 60_000 }, run: runExpireQuotes });
 }

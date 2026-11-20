@@ -61,6 +61,14 @@ npm run dev:backend        # API on http://localhost:4000 (creates and migrates 
 ```
 
 ```bash
+npm run db -- status       # migration state of the dev database; `npm run db -- reset` drops and recreates it
+```
+
+```bash
+npm --workspace @instasupply/backend run create-admin -- --email you@example.com --name "Your Name"
+```
+
+```bash
 npm --workspace @instasupply/backend run seed     # demo stores, products and accounts
 ```
 
@@ -91,6 +99,10 @@ npm test                   # shared domain unit tests
 
 ```bash
 npm run test:backend       # backend tests (each run uses its own throwaway database)
+```
+
+```bash
+npm --workspace @instasupply/backend run test:platform   # platform, auth and authz tests, without the harness
 ```
 
 ```bash

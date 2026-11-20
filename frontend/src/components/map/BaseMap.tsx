@@ -1,14 +1,16 @@
 import 'leaflet/dist/leaflet.css';
 
+import { DEFAULT_MAP_TILES } from '@instasupply/api-client';
+import { useConfig } from '@instasupply/api-client/react';
 import { boundsOf, type LatLng } from '@instasupply/shared';
 import L from 'leaflet';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 
-import { env } from '@/lib/env';
 import { cn } from '@/lib/cn';
 
-export const DEFAULT_CENTER: LatLng = { lat: 12.9716, lng: 77.5946 }; // Bengaluru
+/** Toronto city hall (MARKETPLACE §9). */
+export const DEFAULT_CENTER: LatLng = { lat: 43.6532, lng: -79.3832 };
 
 export const toLeaflet = (point: LatLng): L.LatLngTuple => [point.lat, point.lng];
 
@@ -25,6 +27,8 @@ export function BaseMap({
   children?: ReactNode;
   scrollWheelZoom?: boolean;
 }) {
+  // Tiles come from the server's public config (CLIENTS §7.5); the OpenStreetMap default until it loads.
+  const tiles = useConfig()?.map ?? DEFAULT_MAP_TILES;
   return (
     <MapContainer
       center={toLeaflet(center)}
@@ -34,7 +38,7 @@ export function BaseMap({
       attributionControl
       zoomControl
     >
-      <TileLayer url={env.map.tileUrl} attribution={env.map.attribution} maxZoom={19} />
+      <TileLayer url={tiles.tileUrl} attribution={tiles.attribution} maxZoom={tiles.maxZoom} />
       {children}
     </MapContainer>
   );

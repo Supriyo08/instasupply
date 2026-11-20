@@ -1,35 +1,25 @@
-import { useState } from 'react';
+import { EmptyState, ErrorState, Header, Screen } from '@/components/ui';
+import { CategoryGrid, CategoryGridSkeleton } from '@/features/catalog/components/CategoryGrid';
+import { useCategories } from '@/features/catalog/hooks';
 
-import { Header, IconButton, Screen } from '@/components/ui';
-import { CategoriesContent } from '@/features/catalog/components/CategoryGrid';
-import { CategorySortSheet, type CategorySort } from '@/features/catalog/components/CategorySortSheet';
-
-/** All categories as a three-column grid of pastel tiles. */
+/** All 25 category tiles (MARKETPLACE §7.3); each opens the category across nearby stores. */
 export default function CategoriesScreen() {
-  const [sort, setSort] = useState<CategorySort>('recommended');
-  const [sortOpen, setSortOpen] = useState(false);
-
+  const { data, loading, error, retry, refreshing } = useCategories();
   return (
-    <>
-      <Screen
-        header={
-          <Header
-            title="Categories"
-            right={<IconButton icon="sliders" label="Sort categories" onPress={() => setSortOpen(true)} />}
-          />
-        }
-      >
-        <CategoriesContent sort={sort} />
-      </Screen>
-      <CategorySortSheet
-        visible={sortOpen}
-        value={sort}
-        onChange={(next) => {
-          setSort(next);
-          setSortOpen(false);
-        }}
-        onClose={() => setSortOpen(false)}
-      />
-    </>
+    <Screen header={<Header title="Categories" />} refreshing={refreshing} onRefresh={retry}>
+      {loading && data.length === 0 ? (
+        <CategoryGridSkeleton rows={5} />
+      ) : error && data.length === 0 ? (
+        <ErrorState title="Couldn't load categories" error={error} onRetry={retry} />
+      ) : data.length === 0 ? (
+        <EmptyState
+          art="scene-local-suppliers"
+          title="No categories yet"
+          message="Local suppliers are stocking up. Check back soon."
+        />
+      ) : (
+        <CategoryGrid categories={data} />
+      )}
+    </Screen>
   );
 }

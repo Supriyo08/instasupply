@@ -4,7 +4,7 @@
  * refresh, end the session or show "account suspended".
  */
 import type { Deps } from '../../container';
-import type { ApiError } from '../http/errors';
+import { ApiError } from '../http/errors';
 import { loadActor, type Actor } from './actor';
 import { suspendedError, unauthenticated } from './policies';
 import { verifyAccessToken } from './tokens';
@@ -17,7 +17,16 @@ export async function authenticateToken(deps: Deps, token: string): Promise<Auth
   const now = deps.clock.now();
   const verified = await verifyAccessToken(deps.config, token, now);
   if (!verified.ok) return { actor: null, failure: unauthenticated(verified.reason) };
-  const loaded = await loadActor(deps.pool, verified.uid, verified.sessionId, now);
+  let loaded: Awaited<ReturnType<typeof loadActor>>;
+  try {
+    loaded = await loadActor(deps.pool, verified.uid, verified.sessionId, now);
+  } catch (error) {
+    // The database is down or saturated: a retryable 503, not a bug (§4.2), and logged once here.
+    deps.log.warn({ err: error }, 'could not load the actor');
+    throw new ApiError('unavailable', 'The service is temporarily unavailable. Please try again.', null, {
+      retryAfterMs: 1000,
+    });
+  }
   if (!loaded.ok) {
     return {
       actor: null,

@@ -1,60 +1,61 @@
-import { COLLECTIONS, type AppNotification } from '@instasupply/shared';
-import {
-  collection,
-  doc,
-  limit,
-  orderBy,
-  query,
-  serverTimestamp,
-  updateDoc,
-  where,
-  writeBatch,
-} from 'firebase/firestore';
+import type { AppNotification } from '@instasupply/shared';
+import { useApiMutation, useLiveQuery } from '@instasupply/api-client/react';
+import type { Href } from 'expo-router';
 import { useMemo } from 'react';
 
-import { db } from '@/lib/firebase';
-import { useLiveQuery } from '@/lib/firestore-hooks';
+import { api, queries } from '@/lib/api';
 
+/** The inbox: newest first, a new notification is prepended by its live event (§6.5). */
 export function useNotifications(uid: string) {
-  const inboxQuery = useMemo(
-    () =>
-      query(
-        collection(db, COLLECTIONS.notifications),
-        where('userId', '==', uid),
-        orderBy('createdAt', 'desc'),
-        limit(50),
+  const inbox = useLiveQuery(queries.notifications(uid));
+  const unread = useMemo(() => inbox.data.filter((item) => !item.read).length, [inbox.data]);
+  return { ...inbox, unread };
+}
+
+/** Optimistic "mark read" (§1.12). */
+export function useMarkRead(uid: string) {
+  return useApiMutation((client, id: string) => client.notifications.markRead(id), {
+    optimistic: (cache, id) =>
+      cache.patch<AppNotification[]>(queries.notifications(uid).key, (list) =>
+        list.map((item) => (item.id === id ? { ...item, read: true } : item)),
       ),
-    [uid],
-  );
-  const result = useLiveQuery<AppNotification>(inboxQuery, `inbox:${uid}`);
-  const unread = useMemo(() => result.data.filter((item) => !item.read).length, [result.data]);
-  return { ...result, unread };
+  });
 }
 
-export async function markRead(id: string) {
-  await updateDoc(doc(db, COLLECTIONS.notifications, id), { read: true, readAt: serverTimestamp() });
+/** Optimistic "mark all read". */
+export function useMarkAllRead(uid: string) {
+  return useApiMutation((client) => client.notifications.markAllRead(), {
+    optimistic: (cache) =>
+      cache.patch<AppNotification[]>(queries.notifications(uid).key, (list) =>
+        list.map((item) => (item.read ? item : { ...item, read: true })),
+      ),
+  });
 }
 
-export async function markAllRead(items: AppNotification[]) {
-  const unread = items.filter((item) => !item.read);
-  if (unread.length === 0) return;
-  const batch = writeBatch(db);
-  unread.forEach((item) =>
-    batch.update(doc(db, COLLECTIONS.notifications, item.id), { read: true, readAt: serverTimestamp() }),
-  );
-  await batch.commit();
+/** Outside React (push taps, toasts). Failures are the caller's to ignore. */
+export function markRead(id: string): Promise<void> {
+  return api.notifications.markRead(id);
 }
 
-/** Where tapping a notification should take the driver. */
-export function notificationHref(data: Record<string, unknown> | undefined): string | null {
-  if (!data) return null;
-  if (typeof data.threadId === 'string') return '/chat';
-  if (
-    typeof data.deliveryId === 'string' &&
-    data.type !== 'delivery_unassigned' &&
-    data.type !== 'delivery_cancelled'
-  ) {
-    return `/delivery/${data.deliveryId}`;
+/**
+ * Where a notification leads (docs/CLIENTS.md §6.4, driver rows; first match wins). One function for
+ * system notification taps, in-app banners and inbox rows (merge the row's `type` into `data` first).
+ */
+export function notificationHref(data: Record<string, unknown> | null | undefined): Href {
+  const value = (key: string) => (typeof data?.[key] === 'string' ? (data[key] as string) : null);
+  const type = value('type');
+  const deliveryId = value('deliveryId');
+  if (value('threadId')) return '/chat';
+  if (type === 'job_offer' && deliveryId) return `/job/${deliveryId}`;
+  if (value('payoutId')) return '/earnings';
+  if (type === 'vehicle_review') return '/vehicle';
+  if (deliveryId && type !== 'delivery_unassigned' && type !== 'delivery_cancelled') {
+    return `/delivery/${deliveryId}`;
   }
   return '/notifications';
+}
+
+/** For an inbox row: its own `type` joins the payload before routing. */
+export function hrefForNotification(item: Pick<AppNotification, 'type' | 'data'>): Href {
+  return notificationHref({ ...item.data, type: item.type });
 }

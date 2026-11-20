@@ -1,5 +1,12 @@
-import { QUICK_REPLIES, formatClock, type ChatMessage } from '@instasupply/shared';
-import { useEffect, useState } from 'react';
+import {
+  MAX_CHAT_MESSAGE_LENGTH,
+  QUICK_REPLIES,
+  formatClockET,
+  formatPhone,
+  type ChatMessage,
+} from '@instasupply/shared';
+import { useConfig } from '@instasupply/api-client/react';
+import { useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -12,19 +19,23 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { EmptyState, Icon, IconButton, Text } from '@/components/ui';
+import { TabHeader } from '@/components/TabHeader';
+import { Banner, EmptyState, ErrorState, Icon, IconButton, Skeleton, Text } from '@/components/ui';
 import { useDriver } from '@/features/auth/SessionProvider';
-import { markThreadRead, sendMessage, useMessages, useThread } from '@/features/chat/hooks';
-import { notify } from '@/features/deliveries/useDeliveryAction';
-import { env } from '@/lib/env';
-import { describeError } from '@/lib/errors';
+import { useMarkThreadReadWhenVisible, useMessages, useSendMessage, useThread } from '@/features/chat/hooks';
+import { describeError } from '@/lib/api';
 import { callPhone } from '@/lib/links';
 import { useTheme } from '@/theme/ThemeProvider';
 
 function Bubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
   const { colors, radius } = useTheme();
+  const time = formatClockET(message.createdAt);
   return (
-    <View style={[styles.bubbleRow, { justifyContent: mine ? 'flex-end' : 'flex-start' }]}>
+    <View
+      accessible
+      accessibilityLabel={`${mine ? 'You' : message.senderName}, ${time}: ${message.text}`}
+      style={[styles.bubbleRow, { justifyContent: mine ? 'flex-end' : 'flex-start' }]}
+    >
       <View
         style={[
           styles.bubble,
@@ -43,99 +54,123 @@ function Bubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
           </Text>
         ) : null}
         <Text style={{ color: mine ? colors.onPrimary : colors.text }}>{message.text}</Text>
-        <Text
-          variant="micro"
-          style={{ color: mine ? colors.onPrimary : colors.textSubtle, opacity: 0.8, alignSelf: 'flex-end' }}
-        >
-          {message.createdAt ? formatClock(message.createdAt) : 'Sending…'}
+        <Text variant="micro" style={[styles.time, { color: mine ? colors.onPrimary : colors.textSubtle }]}>
+          {time}
         </Text>
       </View>
     </View>
   );
 }
 
+/**
+ * Dispatch chat (MARKETPLACE §10 `(tabs)/chat`, §2.3 quick replies; CLIENTS §4.6). The thread is marked
+ * read only while this tab is focused and the app is in the foreground (R58, R65), and every send has
+ * its own message id, so two quick taps send two messages.
+ */
 export default function ChatScreen() {
   const { user, profile } = useDriver();
   const { colors, radius } = useTheme();
+  const config = useConfig();
   const thread = useThread(user.uid);
   const messages = useMessages(user.uid);
+  const { send, sending } = useSendMessage(user.uid, profile.displayName);
   const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  useMarkThreadReadWhenVisible(user.uid, thread.data);
 
-  const unread = thread.data?.unreadByDriver ?? 0;
-  useEffect(() => {
-    if (unread > 0) void markThreadRead(user.uid).catch(() => undefined);
-  }, [unread, user.uid]);
+  const supportPhone = config?.supportPhone ?? null;
+  // The list is inverted, so the newest message sits at the bottom next to the composer.
+  const newestFirst = [...messages.data].reverse();
 
-  const send = async (body: string, kind: ChatMessage['kind'] = 'text') => {
-    if (!body.trim() || sending) return;
-    setSending(true);
+  const submit = async (body: string, kind: ChatMessage['kind']) => {
+    if (!body.trim()) return;
+    setProblem(null);
+    if (kind === 'text') setText('');
     try {
-      await sendMessage({ uid: user.uid, senderName: profile.displayName, text: body, kind });
-      if (kind === 'text') setText('');
+      await send({ text: body, kind });
     } catch (error) {
-      notify('Message not sent', describeError(error));
-    } finally {
-      setSending(false);
+      if (kind === 'text') setText((current) => current || body);
+      setProblem(describeError(error));
     }
   };
 
   return (
     <SafeAreaView edges={['top']} style={[styles.fill, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <View style={styles.flex}>
-          <Text variant="title">Dispatch</Text>
-          <Text variant="caption" color="subtle">
-            Messages go to everyone on the dispatch team.
-          </Text>
-        </View>
-        {env.dispatchPhone ? (
-          <IconButton
-            icon="call"
-            label="Call dispatch"
-            tone="success"
-            onPress={() => void callPhone(env.dispatchPhone!)}
-          />
-        ) : null}
+        <TabHeader
+          title="Dispatch"
+          subtitle="Messages reach everyone on the dispatch team."
+          right={
+            supportPhone ? (
+              <IconButton
+                icon="call"
+                label={`Call dispatch, ${formatPhone(supportPhone)}`}
+                tone="success"
+                onPress={() => void callPhone(supportPhone)}
+              />
+            ) : undefined
+          }
+        />
       </View>
       <KeyboardAvoidingView
         style={styles.fill}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={90}
       >
-        <FlatList
-          inverted
-          data={messages.data}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
-          renderItem={({ item }) => <Bubble message={item} mine={item.senderId === user.uid} />}
-          ListEmptyComponent={
-            messages.loading ? undefined : (
-              <View style={styles.flip}>
-                <EmptyState
-                  icon="chatbubbles-outline"
-                  title="No messages yet"
-                  message="Ask dispatch anything — they'll reply here."
-                />
-              </View>
-            )
-          }
-        />
+        {messages.loading ? (
+          <View style={styles.loading} accessibilityLabel="Loading messages">
+            <Skeleton width="60%" height={48} radius={16} />
+            <Skeleton width="45%" height={48} radius={16} style={styles.right} />
+            <Skeleton width="70%" height={48} radius={16} />
+          </View>
+        ) : messages.error ? (
+          <View style={styles.fill}>
+            <ErrorState error={messages.error} onRetry={messages.retry} title="Couldn't load messages" />
+          </View>
+        ) : (
+          <FlatList
+            inverted={newestFirst.length > 0}
+            data={newestFirst}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.list}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => <Bubble message={item} mine={item.senderId === user.uid} />}
+            ListEmptyComponent={
+              <EmptyState
+                icon="chatbubbles-outline"
+                title="No messages yet"
+                message="Store not ready, gate locked, need a hand unloading? Message dispatch here."
+              />
+            }
+          />
+        )}
+        {problem ? (
+          <View style={styles.problem}>
+            <Banner tone="danger" title="Message not sent" message={problem} />
+          </View>
+        ) : null}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.quickBar}
           contentContainerStyle={styles.quick}
           keyboardShouldPersistTaps="handled"
+          accessibilityLabel="Quick replies"
         >
           {QUICK_REPLIES.map((reply) => (
             <Pressable
               key={reply}
               accessibilityRole="button"
-              onPress={() => void send(reply, 'quick_reply')}
-              style={[
+              accessibilityLabel={`Send: ${reply}`}
+              onPress={() => void submit(reply, 'quick_reply')}
+              style={({ pressed }) => [
                 styles.chip,
-                { borderColor: colors.border, backgroundColor: colors.surface, borderRadius: radius.pill },
+                {
+                  borderColor: colors.border,
+                  backgroundColor: colors.surface,
+                  borderRadius: radius.pill,
+                  opacity: pressed ? 0.7 : 1,
+                },
               ]}
             >
               <Text variant="caption">{reply}</Text>
@@ -144,13 +179,13 @@ export default function ChatScreen() {
         </ScrollView>
         <View style={[styles.composer, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
           <TextInput
-            accessibilityLabel="Message"
+            accessibilityLabel="Message to dispatch"
             placeholder="Message dispatch…"
             placeholderTextColor={colors.textSubtle}
             value={text}
             onChangeText={setText}
             multiline
-            maxLength={1000}
+            maxLength={MAX_CHAT_MESSAGE_LENGTH}
             style={[
               styles.input,
               { color: colors.text, backgroundColor: colors.surfaceMuted, borderRadius: radius.lg },
@@ -159,8 +194,9 @@ export default function ChatScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Send"
-            disabled={!text.trim() || sending}
-            onPress={() => void send(text)}
+            accessibilityState={{ disabled: !text.trim(), busy: sending }}
+            disabled={!text.trim()}
+            onPress={() => void submit(text, 'text')}
             style={[styles.send, { backgroundColor: text.trim() ? colors.primary : colors.surfaceMuted }]}
           >
             <Icon name="send" size={18} color={text.trim() ? colors.onPrimary : colors.textSubtle} />
@@ -189,20 +225,14 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   fill: { flex: 1 },
-  flex: { flex: 1 },
-  // The list is inverted, so flip the empty state back upright.
-  flip: { transform: [{ scaleY: -1 }] },
-  header: {
-    alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: 12,
-    padding: 20,
-    paddingBottom: 14,
-  },
+  header: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 20, paddingTop: 12 },
   input: { flex: 1, fontSize: 16, maxHeight: 120, minHeight: 44, paddingHorizontal: 14, paddingVertical: 11 },
-  list: { gap: 10, padding: 16 },
+  list: { flexGrow: 1, gap: 10, padding: 16 },
+  loading: { flex: 1, gap: 12, padding: 16 },
+  problem: { paddingHorizontal: 12, paddingTop: 8 },
   quick: { alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
   quickBar: { flexGrow: 0, flexShrink: 0 },
+  right: { alignSelf: 'flex-end' },
   send: { alignItems: 'center', borderRadius: 22, height: 44, justifyContent: 'center', width: 44 },
+  time: { alignSelf: 'flex-end', opacity: 0.8 },
 });

@@ -1,4 +1,4 @@
-import { formatRelativeTime, STATUS_META, type DeliveryEvent } from '@instasupply/shared';
+import { formatDateTimeET, formatRelativeTime, STATUS_META, type DeliveryEvent } from '@instasupply/shared';
 import { Link } from 'react-router';
 
 import { TONE_CLASSES } from '@/components/ui/Badge';
@@ -6,14 +6,15 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { EmptyState, ErrorState, Skeleton } from '@/components/ui/Feedback';
 import { ActivityIcon } from '@/components/ui/icons';
 import { cn } from '@/lib/cn';
-import type { CollectionState } from '@/lib/firebase/hooks';
+import type { CollectionState } from '@/lib/data';
 
 export function ActivityFeed({ activity, now }: { activity: CollectionState<DeliveryEvent>; now: number }) {
   return (
     <Card>
       <CardHeader title="Live activity" description="Latest changes across all deliveries." />
-      {activity.error ? (
-        <ErrorState error={activity.error} className="m-5" />
+      <h3 className="sr-only">Latest delivery events</h3>
+      {activity.error && activity.data.length === 0 ? (
+        <ErrorState error={activity.error} onRetry={activity.retry} className="m-5" />
       ) : activity.loading && activity.data.length === 0 ? (
         <div className="space-y-3 p-5">
           {[0, 1, 2, 3].map((key) => (
@@ -21,7 +22,12 @@ export function ActivityFeed({ activity, now }: { activity: CollectionState<Deli
           ))}
         </div>
       ) : activity.data.length === 0 ? (
-        <EmptyState icon={ActivityIcon} title="No activity yet" className="py-10" />
+        <EmptyState
+          icon={ActivityIcon}
+          title="No activity yet"
+          description="Assignments, pickups and drop-offs show up here as they happen."
+          className="py-10"
+        />
       ) : (
         <ul className="divide-y divide-slate-100">
           {activity.data.map((event) => {
@@ -46,7 +52,8 @@ export function ActivityFeed({ activity, now }: { activity: CollectionState<Deli
                       {event.message}
                     </span>
                     <span className="block text-xs text-slate-500">
-                      {event.actorName ?? 'System'} · {formatRelativeTime(event.at, now)}
+                      {event.actorName ?? 'System'} ·{' '}
+                      <time title={formatDateTimeET(event.at, now)}>{formatRelativeTime(event.at, now)}</time>
                     </span>
                   </span>
                 </Link>

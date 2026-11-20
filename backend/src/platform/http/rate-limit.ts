@@ -27,6 +27,9 @@ export const BUCKETS = {
   reset_ip: { max: 10, windowSeconds: HOUR },
   reset_email: { max: 3, windowSeconds: HOUR },
   reset_fail_user: { max: 10, windowSeconds: DAY },
+  // Not in §4.6: every call runs scrypt, so a signed-in client could otherwise fill the thread pool and
+  // a stolen access token would get hundreds of guesses a minute at the current password.
+  password_change: { max: 10, windowSeconds: 15 * 60 },
   otp_ip: { max: 20, windowSeconds: HOUR },
   otp_phone: { max: 5, windowSeconds: HOUR },
   otp_phone_day: { max: 10, windowSeconds: DAY },

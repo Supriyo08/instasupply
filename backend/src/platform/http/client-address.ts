@@ -10,11 +10,12 @@ type AddressConfig = Pick<Config, 'TRUST_PROXY'>;
 type OriginConfig = Pick<Config, 'API_URL' | 'RAILWAY_PUBLIC_DOMAIN' | 'NODE_ENV'>;
 
 export function clientAddress(
-  req: { headers: IncomingHttpHeaders; socket: { remoteAddress?: string } },
+  // The socket is missing on requests injected in tests (app.injectWS).
+  req: { headers: IncomingHttpHeaders; socket?: { remoteAddress?: string } | null },
   config: AddressConfig,
 ): string {
   const real = config.TRUST_PROXY ? String(req.headers['x-real-ip'] ?? '').trim() : '';
-  return real || req.socket.remoteAddress || 'unknown';
+  return real || req.socket?.remoteAddress || 'unknown';
 }
 
 /** The origin outside a request (outbox handlers, the CLI). */

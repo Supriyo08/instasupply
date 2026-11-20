@@ -93,8 +93,11 @@ describe('register and log in (§6.3.1, §6.3.4)', () => {
 
   test('the hash carries its parameters; a weaker stored hash is upgraded at login', async () => {
     const read = async () =>
-      (await ctx.pool.query<{ password_hash: string }>(`SELECT password_hash FROM users WHERE email = 'dana@example.com'`))
-        .rows[0]!.password_hash;
+      (
+        await ctx.pool.query<{ password_hash: string }>(
+          `SELECT password_hash FROM users WHERE email = 'dana@example.com'`,
+        )
+      ).rows[0]!.password_hash;
     assert.match(await read(), /^scrypt\$N=1024,r=8,p=1\$/);
     const salt = randomBytes(16);
     const key = scryptSync(PASSWORD.normalize('NFKC'), salt, 32, { N: 512, r: 8, p: 1 });
@@ -115,11 +118,18 @@ describe('register and log in (§6.3.1, §6.3.4)', () => {
     assert.equal((right.body as unknown as ErrorBody).error.details.reason, 'account_suspended');
   });
 
-  test('registerCustomer is a wave-2 stub that answers internal "not implemented"', async () => {
-    const session = await registerAccount(ctx, { email: 'stub@example.com' });
-    const answer = await command<ErrorBody>(ctx, 'registerCustomer', { displayName: 'Stub' }, session.accessToken);
-    assert.equal(answer.status, 500);
-    assert.equal(answer.body.error.message, 'not implemented');
+  test('registerCustomer turns a role-less account into an active customer', async () => {
+    const session = await registerAccount(ctx, { email: 'newcustomer@example.com' });
+    const answer = await command<{ status: string }>(
+      ctx,
+      'registerCustomer',
+      { displayName: 'New Customer' },
+      session.accessToken,
+    );
+    assert.equal(answer.status, 200);
+    assert.deepEqual(answer.body, { status: 'active' });
+    const me = await get<{ profile: { role: string } | null }>(ctx, '/me', session.accessToken);
+    assert.equal(me.body.profile?.role, 'customer');
   });
 
   test('at most 10 active sessions per user; the same install replaces its session', async () => {
@@ -175,7 +185,12 @@ describe('login_email limit (§6.3.4 step 3)', () => {
       method: 'POST',
       url: '/api/v1/auth/login',
       headers: { 'x-real-ip': '203.0.113.7' },
-      payload: { email: 'owner@example.com', password: PASSWORD, installationId: 'owner-phone-1', app: 'customer' },
+      payload: {
+        email: 'owner@example.com',
+        password: PASSWORD,
+        installationId: 'owner-phone-1',
+        app: 'customer',
+      },
     });
     assert.equal(response.statusCode, 200);
     assert.ok(owner.me.account.uid);

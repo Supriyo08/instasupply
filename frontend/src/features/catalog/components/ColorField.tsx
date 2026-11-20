@@ -1,6 +1,6 @@
 import { Field, TextInput } from '@/components/ui/Form';
 
-import { normalizeHex } from '../category-form';
+import { normalizeHex } from '../colors';
 
 /** Hex colour as text, with the native colour picker alongside. */
 export function ColorField({

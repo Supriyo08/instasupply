@@ -1,65 +1,68 @@
-import { describeError } from '@instasupply/expo-firebase';
-import { COLLECTIONS, type AuthClaims, type UserProfile } from '@instasupply/shared';
+import type { PublicConfig, SessionEndReason, SessionUser } from '@instasupply/api-client';
+import { useConfig, useSessionCore } from '@instasupply/api-client/react';
+import type { UserProfile } from '@instasupply/shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { onIdTokenChanged, type IdTokenResult, type User } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
 import {
   createContext,
   useCallback,
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
 
-import { auth, db } from '@/lib/firebase';
+import { claimCheckoutDraft } from '@/features/checkout/checkout-draft';
+import { api, describeError } from '@/lib/api';
 
-import { confirmCustomerClaim, isSigningUp, signOut, subscribeToSignUp } from './auth-service';
+import { isSigningUp, signOut, subscribeToSignUp } from './auth-service';
 
+/** MARKETPLACE §7.2, docs/CLIENTS.md §2.2. `guest` browses the shop without an account. */
 export type SessionStatus =
-  'loading' | 'onboarding' | 'signed_out' | 'needs_profile' | 'needs_phone' | 'wrong_account' | 'ready';
+  'loading' | 'onboarding' | 'guest' | 'needs_profile' | 'needs_phone' | 'wrong_account' | 'ready';
+
+/** Whether this server can verify phones at all (docs/CLIENTS.md §2.2). */
+export type PhoneVerificationMode = PublicConfig['phoneVerification'];
 
 export interface Session {
   status: SessionStatus;
-  user: User | null;
+  user: SessionUser | null;
   profile: UserProfile | null;
-  claims: AuthClaims;
   /** Sign-up is still creating the profile: `status` stays "loading" instead of "needs_profile". */
   signingUp: boolean;
   /**
-   * Set when "loading" can't finish on its own because the account could not be confirmed as a
-   * shopping account. Show this message with a way to `retry` or sign out, not a spinner.
+   * Set when "loading" can't finish on its own: there are tokens but the account can't be loaded and
+   * nothing is cached, or the very first /config never arrived. The root layout shows it with
+   * "Try again" and a sign-out link; screens never handle it.
    */
   problem: string | null;
-  /** Try again after `problem`; the session is plain "loading" while it does. */
+  /** Try again after `problem`. */
   retry: () => void;
   /** Mark the intro slides as seen. */
   finishOnboarding: () => Promise<void>;
+  /** Why the last session ended (expired, revoked, suspended…); null after `acknowledgeEnd`. */
+  endReason: SessionEndReason | null;
+  acknowledgeEnd: () => void;
+  /** `config.phoneVerification`, downgraded to 'off' when this server cannot send a code. */
+  phoneVerification: PhoneVerificationMode;
 }
 
 const ONBOARDED_KEY = 'instasupply.onboarded';
-/** Wait before retrying a token refresh that failed because the device was offline. */
-const TOKEN_RETRY_MS = 5_000;
-const CLAIM_MISSING =
-  "Your account setup hasn't finished on our side. Try again in a moment, or sign out and log in again.";
 const SessionContext = createContext<Session | null>(null);
 
-function isNetworkError(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 'auth/network-request-failed';
+/** A production server with SMS going to the outbox can't deliver a code: treat it as 'off'. */
+export function effectivePhoneVerification(config: PublicConfig | null): PhoneVerificationMode {
+  if (!config) return 'off';
+  if (config.environment === 'production' && config.smsDriver === 'outbox') return 'off';
+  return config.phoneVerification;
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [claims, setClaims] = useState<AuthClaims>({});
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [profileReady, setProfileReady] = useState(false);
+  const core = useSessionCore();
+  const config = useConfig();
+  const [configError, setConfigError] = useState<string | null>(null);
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const claimCheck = useRef(0);
   const signingUp = useSyncExternalStore(subscribeToSignUp, isSigningUp, isSigningUp);
 
   useEffect(() => {
@@ -68,134 +71,77 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       .catch(() => setOnboarded(false));
   }, []);
 
+  // The config store notifies after a failed first load too, so `error()` is read on each change.
   useEffect(() => {
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let latest = 0;
-
-    const applyUser = async (next: User | null) => {
-      const run = (latest += 1);
-      clearTimeout(retry);
-      if (!next) {
-        setUser(null);
-        setClaims({});
-        setAuthReady(true);
-        return;
-      }
-      // True once a newer auth event, or another account, has taken over while we waited.
-      const superseded = () => run !== latest || auth.currentUser?.uid !== next.uid;
-      let token: IdTokenResult;
-      try {
-        token = await next.getIdTokenResult();
-      } catch (error) {
-        if (superseded()) return;
-        if (isNetworkError(error)) {
-          // Offline with an expired token: keep the session and try again shortly.
-          retry = setTimeout(() => void applyUser(next), TOKEN_RETRY_MS);
-          return;
-        }
-        // The saved session can't be refreshed: the account was deleted or disabled, or the
-        // emulators restarted without --persist. Sign out so the login screen shows (the sign-out
-        // comes back here as a null user; if even that fails, show the login screen regardless).
-        await signOut().catch(() => applyUser(null));
-        return;
-      }
-      if (superseded()) return;
-      setClaims({ role: token.claims.role as AuthClaims['role'], active: token.claims.active === true });
-      setUser(next);
-      setAuthReady(true);
+    const read = () => {
+      const error = api.config.error();
+      setConfigError(error ? describeError(error) : null);
     };
-
-    const unsubscribe = onIdTokenChanged(auth, applyUser);
-    return () => {
-      latest += 1; // Drop a token request that is still in flight.
-      clearTimeout(retry);
-      unsubscribe();
-    };
+    read();
+    return api.config.subscribe(read);
   }, []);
 
+  const { user, profile } = core;
   const uid = user?.uid ?? null;
+  // Checkout choices (instructions, receiving, card) belong to one account: drop them on any change.
+  useEffect(() => claimCheckoutDraft(uid), [uid]);
+  const phoneVerification = effectivePhoneVerification(config);
+
+  // `/me` shows a suspended profile while the session still works: end it (docs/CLIENTS.md §2.4).
+  const suspended = profile?.status === 'suspended';
   useEffect(() => {
-    setProfile(null);
-    setProfileReady(false);
-    if (!uid) return;
-    return onSnapshot(
-      doc(db, COLLECTIONS.users, uid),
-      // Needed for the check below: when the server confirms that there is no profile, only the
-      // snapshot's metadata changes.
-      { includeMetadataChanges: true },
-      (snapshot) => {
-        // While Firestore can't be reached the SDK answers from its cache, which is empty after a
-        // cold start. A document missing there says nothing about the account, so wait for the
-        // server (the session stays "loading") instead of asking a shopper for a new profile.
-        if (!snapshot.exists() && snapshot.metadata.fromCache) return;
-        setProfile(snapshot.exists() ? ({ uid, ...snapshot.data() } as UserProfile) : null);
-        setProfileReady(true);
-      },
-      () => setProfileReady(true),
-    );
-  }, [uid]);
+    if (suspended) void signOut();
+  }, [suspended]);
 
-  // A verified shopper whose token carries no role: the shop can't open until the claim is there.
-  const awaitingClaim =
-    !!user && !signingUp && profile?.role === 'customer' && profile.phoneVerified && !claims.role;
-  const activeProfileName = profile?.status === 'active' ? profile.displayName : null;
+  const status = useMemo<SessionStatus>(() => {
+    if (core.status === 'restoring' || onboarded === null || config === null) return 'loading';
+    if (!user) return onboarded ? 'guest' : 'onboarding';
+    if (profile === null) return signingUp ? 'loading' : 'needs_profile';
+    if (profile.role !== 'customer') return 'wrong_account';
+    if (profile.status === 'suspended') return 'loading';
+    if (phoneVerification === 'required' && !profile.phoneVerified) return 'needs_phone';
+    return 'ready';
+  }, [core.status, onboarded, config, user, profile, signingUp, phoneVerification]);
 
-  const confirmClaim = useCallback(async () => {
-    const run = (claimCheck.current += 1);
-    let outcome: string | null;
-    try {
-      // On success the token listener above applies the new claim, which ends the wait.
-      outcome = (await confirmCustomerClaim(activeProfileName)) ? null : CLAIM_MISSING;
-    } catch (error) {
-      outcome = describeError(error);
-    }
-    if (run === claimCheck.current) setProblem(outcome);
-  }, [activeProfileName]);
-
-  useEffect(() => {
-    if (!awaitingClaim) return;
-    void confirmClaim();
-    return () => {
-      claimCheck.current += 1; // Ignore a check that is still running.
-      setProblem(null);
-    };
-  }, [awaitingClaim, confirmClaim]);
+  const problem = core.problem ? describeError(core.problem) : config === null ? configError : null;
 
   const retry = useCallback(() => {
-    setProblem(null);
-    void confirmClaim();
-  }, [confirmClaim]);
+    api.session.retry();
+    api.config.load().catch(() => undefined);
+  }, []);
 
   const finishOnboarding = useCallback(async () => {
     setOnboarded(true);
     await AsyncStorage.setItem(ONBOARDED_KEY, '1').catch(() => undefined);
   }, []);
 
-  const status = useMemo<SessionStatus>(() => {
-    if (!authReady || onboarded === null) return 'loading';
-    if (!user) return onboarded ? 'signed_out' : 'onboarding';
-    if (claims.role && claims.role !== 'customer') return 'wrong_account';
-    if (!profileReady) return 'loading';
-    // During sign-up the profile is on its way: don't send the shopper to /complete-profile.
-    if (!profile) return signingUp ? 'loading' : 'needs_profile';
-    if (profile.role !== 'customer') return 'wrong_account';
-    if (!profile.phoneVerified) return 'needs_phone';
-    if (claims.role !== 'customer') return 'loading';
-    return 'ready';
-  }, [authReady, onboarded, user, claims.role, profileReady, profile, signingUp]);
+  const acknowledgeEnd = useCallback(() => api.session.acknowledgeEnd(), []);
 
   const value = useMemo<Session>(
     () => ({
       status,
       user,
       profile,
-      claims,
       signingUp,
-      problem: awaitingClaim ? problem : null,
+      problem,
       retry,
       finishOnboarding,
+      endReason: core.endReason,
+      acknowledgeEnd,
+      phoneVerification,
     }),
-    [status, user, profile, claims, signingUp, awaitingClaim, problem, retry, finishOnboarding],
+    [
+      status,
+      user,
+      profile,
+      signingUp,
+      problem,
+      retry,
+      finishOnboarding,
+      core.endReason,
+      acknowledgeEnd,
+      phoneVerification,
+    ],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
@@ -206,11 +152,20 @@ export function useSession(): Session {
   return session;
 }
 
-/** For screens inside the signed-in shop, where a customer profile is guaranteed. */
-export function useCustomer(): { user: User; profile: UserProfile } {
+/**
+ * For 🔒 screens, below `<RequireAccount>` (or in a component it renders): a signed-in customer
+ * is guaranteed there. Throws for guests, so never call it on a screen guests can open.
+ */
+export function useCustomer(): { user: SessionUser; profile: UserProfile } {
   const { user, profile } = useSession();
-  if (!user || !profile) throw new Error('useCustomer called outside the signed-in area.');
+  if (!user || !profile) throw new Error('useCustomer called outside a signed-in screen.');
   return { user, profile };
+}
+
+/** The signed-in customer's uid, or null for a guest. Safe on every shop screen. */
+export function useUid(): string | null {
+  const { status, user } = useSession();
+  return status === 'ready' && user ? user.uid : null;
 }
 
 /** Where each session state belongs; the redirect target for protected route groups. */
@@ -218,14 +173,15 @@ export function homeHref(status: SessionStatus) {
   switch (status) {
     case 'onboarding':
       return '/intro' as const;
-    case 'signed_out':
-      return '/welcome' as const;
     case 'needs_profile':
       return '/complete-profile' as const;
     case 'needs_phone':
       return '/verify-phone' as const;
     case 'wrong_account':
       return '/wrong-account' as const;
+    case 'guest':
+      // Guests shop too; this is only where a guarded group sends them (after the intro, say).
+      return '/welcome' as const;
     default:
       return '/' as const;
   }

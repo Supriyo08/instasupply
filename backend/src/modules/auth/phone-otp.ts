@@ -2,7 +2,6 @@
  * Phone verification (docs/PLATFORM.md §6.3.9), ported from legacy/…/auth/phone-otp.ts with the same
  * numbers: 6 digits, 5 minutes, 5 attempts, 30 s between sends, 5 sends per hour.
  */
-import * as shared from '@instasupply/shared';
 import type { RequestPhoneOtpResponse, VerifyPhoneOtpResponse } from '@instasupply/shared';
 import { normalizePhone } from '@instasupply/shared';
 import type { Actor } from '../../platform/auth/actor';
@@ -27,16 +26,14 @@ const HOUR_MS = 3_600_000;
 
 /**
  * PLATFORM §16 edit 10 adds CANADIAN_AREA_CODES and isCanadianNumber to packages/shared. Until the shared
- * team lands it, this copy of the list is used; it is deleted as soon as shared exports the function.
+ * team lands it, this copy is used; replace both with the shared export as soon as it exists.
  */
 const CANADIAN_AREA_CODES = new Set([
   204, 226, 236, 249, 250, 257, 263, 289, 306, 343, 354, 365, 367, 368, 382, 387, 403, 416, 418, 428, 431,
   437, 438, 450, 460, 468, 474, 506, 514, 519, 548, 579, 581, 584, 587, 604, 613, 639, 647, 672, 683, 705,
   709, 742, 753, 778, 780, 782, 807, 819, 825, 867, 873, 879, 902, 905, 942,
 ]);
-const sharedIsCanadian = (shared as { isCanadianNumber?: (e164: string) => boolean }).isCanadianNumber;
-export const isCanadianNumber = (e164: string): boolean =>
-  sharedIsCanadian ? sharedIsCanadian(e164) : CANADIAN_AREA_CODES.has(Number(e164.slice(2, 5)));
+export const isCanadianNumber = (e164: string): boolean => CANADIAN_AREA_CODES.has(Number(e164.slice(2, 5)));
 
 const codeHash = (uid: string, phone: string, code: string): string =>
   hmacHex('otp', `${uid}:${phone}:${code}`);
@@ -183,6 +180,8 @@ export async function verifyPhoneOtp(
   let outcome: VerifyOutcome;
   try {
     outcome = await withTransaction(deps, async (tx): Promise<VerifyOutcome> => {
+      // Lock order (§3.6): the user row (rank 1) before the challenge, because a right code updates users.
+      await tx.query('SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE', [actor.uid]);
       const { rows } = await tx.query<ChallengeRow>(
         `SELECT phone_number, code_hash, attempts, expires_at, last_sent_at, window_started_at, send_count
            FROM otp_challenges WHERE user_id = $1 FOR NO KEY UPDATE`,

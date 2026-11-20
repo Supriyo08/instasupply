@@ -8,9 +8,14 @@ import { Icon, Text, webColumn, type IconName } from '@/components/ui';
 import { useCart } from '@/features/cart/CartProvider';
 import { colors, gradient, shadows } from '@/theme/tokens';
 
-const ICONS: Record<string, IconName> = { index: 'home', account: 'user', favorites: 'heart' };
+const ICONS: Record<string, IconName> = {
+  index: 'home',
+  stores: 'map-pin',
+  orders: 'file-text',
+  account: 'user',
+};
 
-/** Big Cart bottom bar: three line icons on the left and a floating gradient cart button. */
+/** Big Cart bottom bar: Home · Stores · Orders · Account on the left and a floating gradient cart button. */
 export function ShopTabBar({ state, descriptors, navigateToTab }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const cart = useCart();

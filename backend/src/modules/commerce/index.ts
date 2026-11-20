@@ -1,14 +1,26 @@
 /**
- * WAVE-2 PLACEHOLDER written by the platform workstream (docs/PLATFORM.md §15 rule 1). The owner is `commerce`
- * (§15.2), who replaces the bodies; the exported names and signatures are the frozen ones of §9.1, so other
- * modules compile against them today. Its commands answer internal "not implemented" until the owner registers them with defineCommand.
+ * modules/commerce (docs/PLATFORM.md §2.1, §5.2, §5.3.5, §9.1): registerCustomer, placeOrder, cancelOrder,
+ * GET /orders, and the §9.1 helpers other modules call (loadCheckoutContext, stageMarketplaceOrder,
+ * projectOrderAggregate).
  */
 import type { FastifyInstance } from 'fastify';
 import type { Deps } from '../../container';
-import { defineStubCommand } from '../../platform/http/command';
+import { registerCommerceCommands, registerCommerceRoutes } from './routes';
 
-export function register(_app: FastifyInstance, _deps: Deps): void {
-  defineStubCommand('registerCustomer', 'commerce');
-  defineStubCommand('placeOrder', 'commerce');
-  defineStubCommand('cancelOrder', 'commerce');
+export { loadCheckoutContext, type CheckoutContext, type CheckoutContextInput } from './checkout-context';
+export type { CatalogPlanLine, CustomPlanLine, PlanLine } from './checkout';
+export {
+  stageMarketplaceOrder,
+  stagedFromOrder,
+  toPlaceOrderResponse,
+  type MarketplaceOrderPlan,
+  type OrderPlacer,
+  type PlanPayment,
+  type StagedOrder,
+} from './order-writer';
+export { checkAutomaticRefunds, projectOrderAggregate } from './order-aggregate';
+
+export function register(app: FastifyInstance, _deps: Deps): void {
+  registerCommerceCommands();
+  registerCommerceRoutes(app);
 }

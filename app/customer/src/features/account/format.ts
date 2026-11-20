@@ -1,17 +1,15 @@
-import { formatDate, type TimestampLike } from '@instasupply/shared';
+import { formatDate, formatPhone, type TimestampLike } from '@instasupply/shared';
 import { router, type Href } from 'expo-router';
 
-/** "+91 98765 43210" for Indian numbers; other E.164 numbers are shown as stored. */
+/** "(416) 555-0110" for a North American number; others as stored. */
 export function displayPhone(phone: string | null | undefined): string {
-  if (!phone) return '';
-  const indian = /^\+91(\d{5})(\d{5})$/.exec(phone);
-  return indian ? `+91 ${indian[1]} ${indian[2]}` : phone;
+  return formatPhone(phone);
 }
 
-/** "Member since 12 Nov 2025", or null when the profile has no creation date yet. */
-export function memberSince(createdAt: TimestampLike | undefined): string | null {
+/** "Member since Nov 12, 2025", or null when the profile has no creation date yet. */
+export function memberSince(createdAt: TimestampLike | undefined, now: number = Date.now()): string | null {
   if (!createdAt) return null;
-  return `Member since ${formatDate(createdAt)}`;
+  return `Member since ${formatDate(createdAt, now)}`;
 }
 
 /** Go back to the previous screen, or to `fallback` when the screen was opened directly (web deep link). */

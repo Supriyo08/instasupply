@@ -1,40 +1,31 @@
-import {
-  COLLECTIONS,
-  PRIVATE_META_DOC,
-  type Delivery,
-  type DeliveryEvent,
-  type DeliveryPrivateMeta,
-} from '@instasupply/shared';
-import { collection, doc, orderBy, query } from 'firebase/firestore';
-import { useMemo } from 'react';
+import { useConfig, useLiveQuery } from '@instasupply/api-client/react';
+import { useCallback } from 'react';
 
-import { db } from '@/lib/firebase/app';
-import { useCollection, useDocument } from '@/lib/firebase/hooks';
+import { queries } from '@/lib/api';
 
+/** One delivery, live. `data` is null while loading and when it does not exist (check `loading` and `error`). */
 export function useDelivery(deliveryId: string | undefined) {
-  const ref = useMemo(() => (deliveryId ? doc(db, COLLECTIONS.deliveries, deliveryId) : null), [deliveryId]);
-  return useDocument<Delivery>(ref);
+  return useLiveQuery(queries.delivery(deliveryId));
 }
 
+/** The delivery's timeline, newest first (the latest 30 events). */
 export function useDeliveryEvents(deliveryId: string | undefined) {
-  const q = useMemo(
-    () =>
-      deliveryId
-        ? query(collection(db, COLLECTIONS.deliveries, deliveryId, COLLECTIONS.events), orderBy('at', 'desc'))
-        : null,
-    [deliveryId],
-  );
-  return useCollection<DeliveryEvent>(q);
+  return useLiveQuery(queries.deliveryEvents(deliveryId));
 }
 
-/** Tracking token + hand-off code (staff-only document). */
+/** Tracking token and hand-off code (staff only). */
 export function usePrivateMeta(deliveryId: string | undefined) {
-  const ref = useMemo(
-    () =>
-      deliveryId ? doc(db, COLLECTIONS.deliveries, deliveryId, COLLECTIONS.private, PRIVATE_META_DOC) : null,
-    [deliveryId],
-  );
-  return useDocument<DeliveryPrivateMeta>(ref);
+  return useLiveQuery(queries.deliveryPrivate(deliveryId));
 }
 
-export const trackingUrl = (token: string) => `${window.location.origin}/track/${token}`;
+/** The public tracking link of a token on this console, when the server's config is not loaded yet. */
+export const trackingUrl = (token: string) => `${window.location.origin}/track/${encodeURIComponent(token)}`;
+
+/** Builds tracking links from the server's `trackingBaseUrl` (the link the customer's SMS carries). */
+export function useTrackingUrl(): (token: string) => string {
+  const base = useConfig()?.trackingBaseUrl?.replace(/\/+$/, '') ?? null;
+  return useCallback(
+    (token: string) => (base ? `${base}/${encodeURIComponent(token)}` : trackingUrl(token)),
+    [base],
+  );
+}

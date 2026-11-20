@@ -1,63 +1,42 @@
-import { COLLECTIONS, MAX_CHAT_MESSAGE_LENGTH, type ChatMessage, type ChatThread } from '@instasupply/shared';
-import {
-  addDoc,
-  collection,
-  doc,
-  limitToLast,
-  orderBy,
-  query,
-  serverTimestamp,
-  updateDoc,
-} from 'firebase/firestore';
-import { useMemo } from 'react';
+import { useLiveQuery } from '@instasupply/api-client/react';
+import { MAX_CHAT_MESSAGE_LENGTH } from '@instasupply/shared';
 
-import { db } from '@/lib/firebase/app';
-import { useCollection, useDocument } from '@/lib/firebase/hooks';
+import { api, queries } from '@/lib/api';
 
+/** A driver's chat thread with dispatch (the thread id is the driver's uid). */
 export function useThread(driverId: string | undefined) {
-  const ref = useMemo(() => (driverId ? doc(db, COLLECTIONS.threads, driverId) : null), [driverId]);
-  return useDocument<ChatThread>(ref);
+  return useLiveQuery(queries.chatThread(driverId));
 }
 
+/** The thread's latest 100 messages, oldest first; a new message is appended from the live event. */
 export function useMessages(driverId: string | undefined) {
-  const q = useMemo(
-    () =>
-      driverId
-        ? query(
-            collection(db, COLLECTIONS.threads, driverId, COLLECTIONS.messages),
-            orderBy('createdAt', 'asc'),
-            limitToLast(200),
-          )
-        : null,
-    [driverId],
-  );
-  return useCollection<ChatMessage>(q);
+  return useLiveQuery(queries.chatMessages(driverId));
 }
 
-/** Message fields must match the security rules exactly. */
+/** A message id, made once per message the dispatcher writes and reused if sending it is retried. */
+export const newMessageId = () => api.newRequestId();
+
+/**
+ * Sends a staff message. The client-generated id makes a retry after a lost answer safe (D17): the
+ * server stores the message once, so the caller passes the same `id` again on retry. The server stamps
+ * the sender from the session.
+ */
 export async function sendStaffMessage(input: {
+  id: string;
   driverId: string;
   text: string;
-  senderId: string;
-  senderName: string;
   deliveryId?: string | null;
 }) {
   const text = input.text.trim().slice(0, MAX_CHAT_MESSAGE_LENGTH);
   if (!text) return;
-  await addDoc(collection(db, COLLECTIONS.threads, input.driverId, COLLECTIONS.messages), {
+  await api.chat.send(input.driverId, {
+    id: input.id,
     text,
-    senderId: input.senderId,
-    senderName: input.senderName.slice(0, 80),
-    senderRole: 'staff',
     deliveryId: input.deliveryId ?? null,
     kind: 'text',
-    createdAt: serverTimestamp(),
   });
 }
 
 export async function markThreadRead(driverId: string) {
-  await updateDoc(doc(db, COLLECTIONS.threads, driverId), {
-    unreadByStaff: 0,
-    staffReadAt: serverTimestamp(),
-  });
+  await api.chat.markRead(driverId);
 }

@@ -1,25 +1,19 @@
 /**
- * The shop order a delivery fulfils, shown on the delivery page. Deliberately light: it must not
- * pull illustrations (@instasupply/art) into the delivery screens.
+ * The marketplace order a delivery belongs to, shown on the delivery page. Deliberately light: it
+ * must not pull the illustrations (@instasupply/art) into the delivery screens.
  */
-import { formatCurrency, formatDateTime, pluralize } from '@instasupply/shared';
+import { formatDateTimeET, formatMoney, orderHeadline, pluralize, type Order } from '@instasupply/shared';
 import { Link } from 'react-router';
 
 import { Card, CardBody, CardHeader, DetailRow } from '@/components/ui/Card';
 import { ErrorState, Skeleton } from '@/components/ui/Feedback';
-import { CashIcon, ChevronRightIcon } from '@/components/ui/icons';
-import type { OrderRecord } from '@/lib/data';
+import { ChevronRightIcon } from '@/components/ui/icons';
 
 import { useOrder } from '../hooks';
-import { cashToCollect } from '../order-format';
-import { OrderStatusBadge, PaymentBadge } from './OrderBadges';
+import { customerLine, orderHref } from '../order-format';
+import { OrderStatusBadge, PaymentBadge, StoreOrderStatusBadge } from './OrderBadges';
 
-const PREVIEW_LINES = 4;
-
-function OrderSummary({ order }: { order: OrderRecord }) {
-  const cash = cashToCollect(order);
-  const more = order.items.length - PREVIEW_LINES;
-
+function OrderSummary({ order }: { order: Order }) {
   return (
     <div className="space-y-3">
       <div>
@@ -28,32 +22,26 @@ function OrderSummary({ order }: { order: OrderRecord }) {
           <OrderStatusBadge status={order.status} />
         </div>
         <p className="mt-0.5 text-xs text-slate-500">
-          {pluralize(order.itemCount, 'item')} · placed {formatDateTime(order.createdAt)}
+          {customerLine(order)} · {pluralize(order.itemCount, 'item')} · placed{' '}
+          {formatDateTimeET(order.createdAt)}
         </p>
+        <p className="mt-1 text-sm text-slate-700">{orderHeadline(order)}</p>
       </div>
-      <ul className="space-y-1 text-sm" aria-label="Items">
-        {order.items.slice(0, PREVIEW_LINES).map((item, index) => (
-          <li key={`${item.productId}-${index}`} className="flex justify-between gap-3">
+      <ul className="space-y-1.5 text-sm" aria-label="Store orders">
+        {order.storeOrders.map((so) => (
+          <li key={so.storeOrderId} className="flex items-center justify-between gap-3">
             <span className="min-w-0 truncate text-slate-700">
-              {item.quantity} × {item.name}
+              <span className="font-mono text-xs">{so.number}</span> · {so.storeName}
             </span>
-            <span className="shrink-0 text-slate-500 tabular-nums">{formatCurrency(item.lineTotal)}</span>
+            <StoreOrderStatusBadge status={so.status} />
           </li>
         ))}
-        {more > 0 ? <li className="text-xs text-slate-400">+{pluralize(more, 'more product')}</li> : null}
       </ul>
       <dl className="divide-y divide-slate-100 border-t border-slate-100">
-        <DetailRow label="Total">{formatCurrency(order.total)}</DetailRow>
+        <DetailRow label="Total">{formatMoney(order.current.totalCents)}</DetailRow>
         <DetailRow label="Payment">
-          <PaymentBadge order={order} />
+          <PaymentBadge status={order.payment.status} />
         </DetailRow>
-        {cash != null ? (
-          <DetailRow label="Cash to collect">
-            <span className="inline-flex items-center gap-1.5 text-amber-700">
-              <CashIcon size={14} aria-hidden /> {formatCurrency(cash)}
-            </span>
-          </DetailRow>
-        ) : null}
       </dl>
     </div>
   );
@@ -65,11 +53,11 @@ export function LinkedOrderCard({ orderId }: { orderId: string }) {
   return (
     <Card>
       <CardHeader
-        title="Shop order"
-        description="Placed by the shopper in the customer app."
+        title="Marketplace order"
+        description="Placed by the customer in the InstaSupply app."
         action={
           <Link
-            to={`/orders/${orderId}`}
+            to={orderHref(orderId)}
             className="inline-flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700"
           >
             View order <ChevronRightIcon size={14} aria-hidden />
@@ -77,8 +65,8 @@ export function LinkedOrderCard({ orderId }: { orderId: string }) {
         }
       />
       <CardBody>
-        {order.error ? (
-          <ErrorState error={order.error} />
+        {order.error && !order.data ? (
+          <ErrorState error={order.error} onRetry={order.retry} />
         ) : order.loading && !order.data ? (
           <div className="space-y-2" aria-busy="true">
             <Skeleton className="h-5 w-32" />
@@ -88,7 +76,7 @@ export function LinkedOrderCard({ orderId }: { orderId: string }) {
         ) : order.data ? (
           <OrderSummary order={order.data} />
         ) : (
-          <p className="text-sm text-slate-500">The shop order for this delivery was not found.</p>
+          <p className="text-sm text-slate-500">The order for this delivery was not found.</p>
         )}
       </CardBody>
     </Card>

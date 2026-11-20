@@ -1,141 +1,116 @@
 /**
- * Pure helpers for shop orders: list filters, payment labels, item summaries, search and the
- * staff cancel rule. No React and no illustrations, so any screen can import them cheaply.
+ * Pure helpers for the marketplace order screens (MARKETPLACE §1.3, §2.1, §2.2, §3.8): staff wording
+ * for payment states and events, reasons, and small label builders. No React and no illustrations, so
+ * any screen (issues, support, stores) can import them cheaply. Status words and colours come from
+ * shared (`ORDER_STATUS_META`, `STORE_ORDER_META`): the staff, supplier and customer screens agree.
  */
-import {
-  ORDER_OPEN_STATUSES,
-  canTransition,
-  isTerminalStatus,
-  type CardBrand,
-  type Delivery,
-  type Order,
-  type OrderStatus,
-  type PaymentStatus,
+import type {
+  CardBrand,
+  Fulfilment,
+  Order,
+  PaymentEvent,
+  PaymentStatus,
+  ShortReason,
+  StoreOrder,
+  StoreRejectReason,
 } from '@instasupply/shared';
 
 import type { Tone } from '@/components/ui/Badge';
 
-// ---------- list tabs (?status=…) ----------
-
-export type OrderTab = 'open' | 'attention' | 'delivered' | 'cancelled' | 'all';
-
-export interface OrderListFilter {
-  tab: OrderTab;
-  /** Narrows the open list to one open status (deep links such as `?status=placed`). */
-  status: OrderStatus | null;
-}
-
-/** Reads `?status=`: a tab name, or a raw order status (open ones filter the open list). */
-export function parseStatusParam(value: string | null): OrderListFilter {
-  switch (value) {
-    case 'attention':
-    case 'failed':
-      return { tab: 'attention', status: null };
-    case 'delivered':
-    case 'cancelled':
-    case 'all':
-      return { tab: value, status: null };
-    default:
-      return { tab: 'open', status: ORDER_OPEN_STATUSES.find((status) => status === value) ?? null };
-  }
-}
-
-/** Link to the orders list: a tab, or one order status (as read by `parseStatusParam`). */
-export function ordersHref(view: OrderTab | OrderStatus = 'open'): string {
-  return view === 'open' ? '/orders' : `/orders?status=${view}`;
-}
-
-// ---------- payment ----------
-
-const CARD_BRANDS: Record<CardBrand, string> = {
+export const CARD_BRAND_LABELS: Record<CardBrand, string> = {
   visa: 'Visa',
   mastercard: 'Mastercard',
-  rupay: 'RuPay',
   amex: 'Amex',
+  discover: 'Discover',
   card: 'Card',
 };
 
-const PAYMENT_STATUS: Record<PaymentStatus, { label: string; tone: Tone }> = {
-  cod_pending: { label: 'To collect', tone: 'neutral' },
-  collected: { label: 'Collected', tone: 'success' },
-  paid: { label: 'Paid', tone: 'success' },
-  refund_pending: { label: 'Refund pending', tone: 'warning' },
+/** Card payments only (D6): authorized at checkout, captured once every store order is settled. */
+export const PAYMENT_STATUS_META: Record<PaymentStatus, { label: string; tone: Tone }> = {
+  authorized: { label: 'Authorized', tone: 'info' },
+  capture_pending: { label: 'Capturing', tone: 'info' },
+  captured: { label: 'Captured', tone: 'success' },
+  capture_failed: { label: 'Capture failed', tone: 'danger' },
+  partially_refunded: { label: 'Partly refunded', tone: 'warning' },
   refunded: { label: 'Refunded', tone: 'neutral' },
+  voided: { label: 'Released', tone: 'neutral' },
+  not_required: { label: 'No payment', tone: 'neutral' },
 };
 
-type PaymentFields = Pick<Order, 'status' | 'paymentMethod' | 'paymentStatus' | 'card' | 'total'>;
+export const PAYMENT_EVENT_LABELS: Record<PaymentEvent['type'], string> = {
+  authorize: 'Authorized',
+  void: 'Authorization released',
+  capture: 'Captured',
+  capture_failed: 'Capture failed',
+  release: 'Released',
+  refund: 'Refunded',
+};
 
-export function paymentStatusMeta(order: Pick<Order, 'status' | 'paymentStatus'>): {
-  label: string;
-  tone: Tone;
-} {
-  // Cash is never collected for a cancelled order, whatever the payment record still says.
-  if (order.status === 'cancelled' && order.paymentStatus === 'cod_pending') {
-    return { label: 'Not collected', tone: 'neutral' };
-  }
-  return PAYMENT_STATUS[order.paymentStatus];
+/** The reasons a store (or staff for it) may give when it turns an order down or backs out (§2.1). */
+export const REJECT_REASONS: { id: StoreRejectReason; label: string }[] = [
+  { id: 'out_of_stock', label: 'Out of stock' },
+  { id: 'cannot_meet_time', label: "Can't make the time" },
+  { id: 'store_closed', label: 'Store closed' },
+  { id: 'pricing_error', label: 'Pricing error' },
+  { id: 'cannot_deliver_to_site', label: "Can't deliver to the site" },
+  { id: 'other', label: 'Other' },
+];
+
+const REJECT_LABELS: Record<StoreRejectReason, string> = {
+  out_of_stock: 'Out of stock',
+  cannot_meet_time: "Can't make the time",
+  store_closed: 'Store closed',
+  pricing_error: 'Pricing error',
+  cannot_deliver_to_site: "Can't deliver to the site",
+  no_response: 'No answer in time',
+  other: 'Other',
+};
+
+export function rejectReasonLabel(reason: StoreRejectReason | null | undefined): string | null {
+  return reason ? REJECT_LABELS[reason] : null;
 }
 
-/** "COD" or "Card •••• 4242". */
-export function paymentMethodLabel(order: Pick<Order, 'paymentMethod' | 'card'>): string {
-  if (order.paymentMethod === 'cod') return 'COD';
-  return order.card ? `Card •••• ${order.card.last4}` : 'Card';
+export const SHORT_REASONS: { id: ShortReason; label: string }[] = [
+  { id: 'out_of_stock', label: 'Out of stock' },
+  { id: 'damaged', label: 'Damaged' },
+  { id: 'discontinued', label: 'Discontinued' },
+  { id: 'other', label: 'Other' },
+];
+
+export const FULFILMENT_LABELS: Record<Fulfilment, string> = {
+  delivery: 'Delivery',
+  pickup: 'Pickup',
+};
+
+export const SOURCE_LABELS: Record<Order['source'], string> = {
+  cart: 'Cart',
+  quote: 'Quote',
+  replacement: 'Replacement',
+};
+
+/** "Dana Whitfield · Whitfield Renovations", or the name alone. */
+export function customerLine(order: Pick<Order, 'customerName' | 'companyName'>): string {
+  return order.companyName ? `${order.customerName} · ${order.companyName}` : order.customerName;
 }
 
-/** "Visa •••• 4242". */
-export function cardLabel(card: NonNullable<Order['card']>): string {
-  return `${CARD_BRANDS[card.brand] ?? 'Card'} •••• ${card.last4}`;
+/** "Visa •••• 4242", "No payment" for a replacement. */
+export function cardLabel(payment: Order['payment']): string {
+  if (payment.method === 'none' || !payment.card) return 'No payment';
+  return `${CARD_BRAND_LABELS[payment.card.brand] ?? 'Card'} •••• ${payment.card.last4}`;
 }
 
-/** Cash the driver still has to collect on delivery, or null. */
-export function cashToCollect(order: PaymentFields): number | null {
-  const due =
-    order.paymentMethod === 'cod' && order.paymentStatus === 'cod_pending' && order.status !== 'cancelled';
-  return due ? order.total : null;
+/** Where the store order goes: "Leslieville · M4M" for delivery, "Pickup at the counter" for pickup. */
+export function destinationLabel(storeOrder: Pick<StoreOrder, 'fulfilment' | 'jobsite'>): string {
+  if (storeOrder.fulfilment === 'pickup') return 'Pickup at the counter';
+  return storeOrder.jobsite?.areaLabel ?? 'Jobsite';
 }
 
-// ---------- items ----------
-
-/** "Strawberry, Banana +3 more". */
-export function itemNames(order: Pick<Order, 'items'>, count: number): string {
-  const names = order.items.slice(0, count).map((item) => item.name);
-  const rest = order.items.length - names.length;
-  return rest > 0 ? `${names.join(', ')} +${rest} more` : names.join(', ');
+/** A store order the server still has to move on: not final, so its SLA timers matter. */
+export function isStoreOrderOpen(status: StoreOrder['status']): boolean {
+  return !['delivered', 'picked_up', 'rejected', 'cancelled'].includes(status);
 }
 
-// ---------- search ----------
-
-const digitsOf = (value: string) => value.replace(/\D/g, '');
-
-/** Order number, customer or recipient name, phone (any formatting) or city. */
-export function matchesOrderSearch(order: Order, term: string): boolean {
-  const text = term.trim().toLowerCase();
-  if (!text) return true;
-  const haystack = [
-    order.number,
-    order.customerName,
-    order.address.name,
-    order.address.phone,
-    order.address.city,
-  ]
-    .join(' ')
-    .toLowerCase();
-  if (haystack.includes(text)) return true;
-  const digits = digitsOf(text);
-  return digits.length >= 4 && digitsOf(order.address.phone).includes(digits);
-}
-
-// ---------- actions ----------
-
-/** Staff may cancel an open order until its delivery is finished (delivered, failed or cancelled). */
-export function canCancelOrder(
-  order: Pick<Order, 'status'>,
-  delivery: Pick<Delivery, 'status'> | null,
-): boolean {
-  return (
-    !!delivery &&
-    ORDER_OPEN_STATUSES.includes(order.status) &&
-    !isTerminalStatus(delivery.status) &&
-    canTransition(delivery.status, 'cancelled', 'staff')
-  );
+/** Link to an order's detail; store orders open their parent order. */
+export function orderHref(orderId: string): string {
+  return `/orders/${encodeURIComponent(orderId)}`;
 }

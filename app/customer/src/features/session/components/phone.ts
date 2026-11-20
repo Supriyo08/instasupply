@@ -1,10 +1,10 @@
-import { DEFAULT_COUNTRY_CODE, normalizePhone } from '@instasupply/shared';
+import { formatPhone as formatNanp, normalizePhone } from '@instasupply/shared';
 
 import { requestPhoneCode } from '@/features/session/auth-service';
 
 export interface CodeRequest {
   phone: string;
-  /** Only returned by the local emulator. */
+  /** Only returned by a development server (`EXPOSE_DEV_CODES`). */
   devCode: string | null;
   sentAt: number;
   resendInSeconds: number;
@@ -46,38 +46,27 @@ export function forgetCodeRequest() {
   lastRequest = null;
 }
 
-const INDIAN_MOBILE = /^[6-9]\d{9}$/;
+/** The country chip beside the number: codes go to Canadian (NANP) numbers only (docs/CLIENTS.md §2.2). */
+export const COUNTRY_CODE = '+1';
 
-/** Validate the number typed next to the +91 chip. Returns E.164 or a message for the user. */
+/** Validate the number typed next to the +1 chip. Returns E.164 or a message for the user. */
 export function parsePhoneInput(
   raw: string,
 ): { phone: string; error?: undefined } | { phone?: undefined; error: string } {
   const value = raw.trim();
   if (!value) return { error: 'Enter your mobile number.' };
-  // People often type the country code without "+" ("91 98765 43210").
-  const digits = value.replace(/[^\d+]/g, '');
-  const candidate = /^91[6-9]\d{9}$/.test(digits) ? `+${digits}` : value;
-  const phone = normalizePhone(candidate);
-  if (!phone) return { error: 'Enter a valid mobile number.' };
-  if (
-    phone.startsWith(DEFAULT_COUNTRY_CODE) &&
-    !INDIAN_MOBILE.test(phone.slice(DEFAULT_COUNTRY_CODE.length))
-  ) {
-    return { error: 'Enter a valid 10-digit mobile number.' };
-  }
+  const phone = normalizePhone(value);
+  if (!phone) return { error: 'Enter a valid 10-digit Canadian number, like (416) 555-0110.' };
   return { phone };
 }
 
-/** "+919876543210" → "98765 43210", for the field next to the +91 chip. */
+/** "+14165550110" → "(416) 555-0110", for the field next to the +1 chip. */
 export function toNationalInput(phone: string | null | undefined): string {
   if (!phone) return '';
-  if (!phone.startsWith(DEFAULT_COUNTRY_CODE)) return phone;
-  const national = phone.slice(DEFAULT_COUNTRY_CODE.length);
-  return national.length === 10 ? `${national.slice(0, 5)} ${national.slice(5)}` : national;
+  return normalizePhone(phone) ? formatNanp(phone) : phone;
 }
 
-/** "+919876543210" → "+91 98765 43210". */
+/** "+14165550110" → "+1 (416) 555-0110". */
 export function formatPhone(phone: string): string {
-  const national = toNationalInput(phone);
-  return phone.startsWith(DEFAULT_COUNTRY_CODE) ? `${DEFAULT_COUNTRY_CODE} ${national}` : phone;
+  return normalizePhone(phone) ? `${COUNTRY_CODE} ${formatNanp(phone)}` : phone;
 }

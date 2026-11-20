@@ -1,11 +1,12 @@
+import { useConfig } from '@instasupply/api-client/react';
+
 import { Button, EmptyState, Screen } from '@/components/ui';
-import { signOut } from '@/features/auth/auth-service';
+import { acknowledgeSessionEnd, signOut } from '@/features/auth/auth-service';
 import { useSession, type SessionStatus } from '@/features/auth/SessionProvider';
-import { env } from '@/lib/env';
 import { callPhone } from '@/lib/links';
 
 type Notice = {
-  icon: 'briefcase-outline' | 'basket-outline' | 'lock-closed-outline';
+  icon: 'briefcase-outline' | 'cart-outline' | 'storefront-outline' | 'lock-closed-outline';
   title: string;
   message: string;
 };
@@ -13,22 +14,30 @@ type Notice = {
 const NOTICES: Partial<Record<SessionStatus, Notice>> = {
   staff_account: {
     icon: 'briefcase-outline',
-    title: 'This is a dispatch account',
-    message:
-      'Use the InstaSupply back office on the web to manage deliveries. Sign in here with a driver account.',
+    title: 'This is an InstaSupply staff account',
+    message: 'Use the InstaSupply console on the web. To drive with us, sign in here with a driver account.',
   },
   shopper_account: {
-    icon: 'basket-outline',
-    title: 'This is a shopper account',
+    icon: 'cart-outline',
+    title: 'This is a customer account',
+    message: 'Order materials in the InstaSupply app. To drive with us, sign up here with a different email.',
+  },
+  supplier_account: {
+    icon: 'storefront-outline',
+    title: 'This is a supplier account',
     message:
-      'Use the InstaSupply shopping app to order groceries. To deliver with us, sign up here with a different email.',
+      'Manage your store in the InstaSupply portal on the web. To drive with us, use a different email.',
   },
 };
 
-/** Shown for suspended drivers and for staff or shopper accounts that opened the driver app. */
+/** Suspended drivers and staff, customer or supplier accounts that opened the driver app (CLIENTS §2.3). */
 export default function AccountNotice() {
-  const { status, profile } = useSession();
+  const { status, profile, user } = useSession();
+  const config = useConfig();
   const notice = NOTICES[status];
+  const supportPhone = config?.supportPhone ?? null;
+  // Suspended with no session left (the server ended it): "Back to sign in" forgets the reason.
+  const signedOut = status === 'suspended' && !user;
   return (
     <Screen>
       <EmptyState
@@ -37,18 +46,22 @@ export default function AccountNotice() {
         message={
           notice?.message ??
           profile?.suspendedReason ??
-          'Please contact your dispatcher to reactivate your account.'
+          'Your account is suspended. Contact InstaSupply support to reactivate it.'
         }
       />
-      {!notice && env.dispatchPhone ? (
+      {!notice && supportPhone ? (
         <Button
-          label="Call dispatch"
+          label="Call InstaSupply"
           icon="call"
           variant="secondary"
-          onPress={() => void callPhone(env.dispatchPhone!)}
+          onPress={() => void callPhone(supportPhone)}
         />
       ) : null}
-      <Button label="Sign out" onPress={() => void signOut()} />
+      {signedOut ? (
+        <Button label="Back to sign in" onPress={acknowledgeSessionEnd} />
+      ) : (
+        <Button label="Sign out" onPress={() => void signOut()} />
+      )}
     </Screen>
   );
 }

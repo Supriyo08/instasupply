@@ -1,7 +1,11 @@
 /**
- * CSV import: template, header normalization and row → delivery input mapping.
+ * CSV import of manual deliveries: template, header mapping and row → delivery input mapping.
+ * Customers pay by card, so there is no cash-on-delivery column (MARKETPLACE §12.5). Headers that do not
+ * map to a column, and two headers that map to the same column, are reported before importing (R45).
  */
-import { validateDeliveryInput, type DeliveryInput } from '@instasupply/shared';
+import { addLocalDays, localDateOf, validateDeliveryInput, type DeliveryInput } from '@instasupply/shared';
+
+import { fromLocalInput } from '../components/delivery-form';
 
 export const CSV_COLUMNS = [
   'customerName',
@@ -14,48 +18,62 @@ export const CSV_COLUMNS = [
   'notes',
   'packageCount',
   'priority',
-  'codAmount',
   'requireCode',
   'windowStart',
   'windowEnd',
 ] as const;
 
-/** Example window: tomorrow 10:00–13:00 local time. */
+export type CsvColumn = (typeof CSV_COLUMNS)[number];
+
+export const COLUMN_LABEL: Record<CsvColumn, string> = {
+  customerName: 'Site contact',
+  customerPhone: 'Phone',
+  customerEmail: 'Email',
+  address: 'Address',
+  lat: 'Latitude',
+  lng: 'Longitude',
+  addressNotes: 'Directions',
+  notes: 'Notes',
+  packageCount: 'Pieces',
+  priority: 'Priority',
+  requireCode: 'Hand-off code',
+  windowStart: 'Window start',
+  windowEnd: 'Deliver by',
+};
+
+/** Example window: tomorrow 7:00–9:00 am, Toronto time. */
 function exampleWindow(): [string, string] {
-  const date = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  return [`${day} 10:00`, `${day} 13:00`];
+  const day = addLocalDays(localDateOf(Date.now()), 1);
+  return [`${day} 07:00`, `${day} 09:00`];
 }
 
 const templateRows = (): string[][] => [
   [
-    'Asha Rao',
-    '+919811000001',
-    'asha@example.com',
-    '12, 80 Feet Rd, Koramangala 4th Block, Bengaluru',
-    '12.9352',
-    '77.6245',
-    'Blue gate, 2nd floor',
+    'Dana Whitfield',
+    '+14165550142',
+    'site@whitfieldreno.ca',
+    '1200 Queen St E, Toronto, ON M4M 1L5',
+    '43.6629',
+    '-79.3315',
+    'Side lane off Leslie St, ask for Dana',
     '',
-    '1',
+    '3',
     'normal',
-    '',
     'false',
     '',
     '',
   ],
   [
-    'Vikram Shetty',
-    '9811000002',
+    'Marco Bianchi',
+    '647-555-0199',
     '',
-    '27th Main Rd, HSR Layout Sector 1, Bengaluru',
+    '88 Main St N, Brampton, ON L6V 1N7',
     '',
     '',
-    '',
-    'Fragile',
+    'Unload at the back gate',
+    'Fragile: windows',
     '2',
     'high',
-    '1299',
     'true',
     ...exampleWindow(),
   ],
@@ -77,17 +95,36 @@ export function downloadTemplate() {
   URL.revokeObjectURL(url);
 }
 
-/** Accept common header spellings: "Customer Name", "customer_name", "Latitude"… */
-const HEADER_ALIASES: Record<string, (typeof CSV_COLUMNS)[number]> = {
+/**
+ * Common header spellings, matched after lower-casing and dropping everything but letters: "Customer
+ * Name", "customer_name", "Phone Number", "Mobile No", "Latitude"… Kept conservative: generic headers such
+ * as "amount" or "total" are never mapped to anything.
+ */
+const HEADER_ALIASES: Record<string, CsvColumn> = {
   customername: 'customerName',
   name: 'customerName',
   customer: 'customerName',
+  contact: 'customerName',
+  contactname: 'customerName',
+  sitecontact: 'customerName',
   customerphone: 'customerPhone',
   phone: 'customerPhone',
+  phonenumber: 'customerPhone',
+  phoneno: 'customerPhone',
   mobile: 'customerPhone',
+  mobileno: 'customerPhone',
+  mobilenumber: 'customerPhone',
+  cell: 'customerPhone',
+  cellphone: 'customerPhone',
+  contactnumber: 'customerPhone',
+  customermobile: 'customerPhone',
   customeremail: 'customerEmail',
   email: 'customerEmail',
+  emailaddress: 'customerEmail',
   address: 'address',
+  deliveryaddress: 'address',
+  siteaddress: 'address',
+  jobsiteaddress: 'address',
   lat: 'lat',
   latitude: 'lat',
   lng: 'lng',
@@ -96,12 +133,12 @@ const HEADER_ALIASES: Record<string, (typeof CSV_COLUMNS)[number]> = {
   longitude: 'lng',
   addressnotes: 'addressNotes',
   directions: 'addressNotes',
+  siteinstructions: 'addressNotes',
   notes: 'notes',
   packagecount: 'packageCount',
   packages: 'packageCount',
+  pieces: 'packageCount',
   priority: 'priority',
-  codamount: 'codAmount',
-  cod: 'codAmount',
   requirecode: 'requireCode',
   handoffcode: 'requireCode',
   windowstart: 'windowStart',
@@ -109,27 +146,90 @@ const HEADER_ALIASES: Record<string, (typeof CSV_COLUMNS)[number]> = {
   deliverby: 'windowEnd',
 };
 
-export function normalizeHeader(header: string): string {
+/** Headers that look like a cash amount: reported with an explanation instead of silently dropped. */
+const CASH_HEADERS = new Set(['cod', 'codamount', 'cashondelivery', 'amounttocollect', 'cash', 'collect']);
+
+export function normalizeHeader(header: string): CsvColumn | null {
   const key = header.toLowerCase().replace(/[^a-z]/g, '');
-  return HEADER_ALIASES[key] ?? header;
+  return HEADER_ALIASES[key] ?? null;
+}
+
+export interface HeaderReport {
+  /** Original header → column, for the headers that are used. */
+  mapped: { header: string; column: CsvColumn }[];
+  /** Headers whose values are not imported. */
+  ignored: { header: string; reason: string }[];
+  /** Columns that more than one header maps to; only the first header's values are used. */
+  duplicates: { column: CsvColumn; headers: string[] }[];
+  /** Which original header feeds each column. */
+  sourceOf: Partial<Record<CsvColumn, string>>;
+}
+
+export function mapHeaders(headers: readonly string[]): HeaderReport {
+  const report: HeaderReport = { mapped: [], ignored: [], duplicates: [], sourceOf: {} };
+  const byColumn = new Map<CsvColumn, string[]>();
+  for (const header of headers) {
+    if (!header.trim()) continue;
+    const column = normalizeHeader(header);
+    if (!column) {
+      const key = header.toLowerCase().replace(/[^a-z]/g, '');
+      report.ignored.push({
+        header,
+        reason:
+          CASH_HEADERS.has(key) || key.startsWith('cod')
+            ? 'no cash on delivery: customers pay by card'
+            : 'not a delivery column',
+      });
+      continue;
+    }
+    const list = byColumn.get(column) ?? [];
+    list.push(header);
+    byColumn.set(column, list);
+  }
+  for (const [column, list] of byColumn) {
+    report.sourceOf[column] = list[0]!;
+    report.mapped.push({ header: list[0]!, column });
+    if (list.length > 1) {
+      report.duplicates.push({ column, headers: list });
+      for (const extra of list.slice(1)) {
+        report.ignored.push({ header: extra, reason: `same column as "${list[0]}"` });
+      }
+    }
+  }
+  return report;
 }
 
 export interface ParsedRow {
   rowNumber: number;
-  raw: Record<string, string>;
+  /** Values by column (first header of each column). */
+  raw: Partial<Record<CsvColumn, string>>;
   input: DeliveryInput | null;
   error: string | null;
   /** No coordinates: the server will geocode the address. */
   needsGeocoding: boolean;
 }
 
+/** Picks each column's value from the header that feeds it. */
+export function projectRow(
+  record: Record<string, string | undefined>,
+  sourceOf: HeaderReport['sourceOf'],
+): Partial<Record<CsvColumn, string>> {
+  const raw: Partial<Record<CsvColumn, string>> = {};
+  for (const column of CSV_COLUMNS) {
+    const header = sourceOf[column];
+    const value = header ? record[header] : undefined;
+    if (value !== undefined) raw[column] = value;
+  }
+  return raw;
+}
+
+/** "2026-11-21 07:00" or "2026-11-21T07:00", Toronto time; empty is null; anything else is NaN. */
 const parseTime = (value: string | undefined): number | null => {
   if (!value?.trim()) return null;
-  const millis = new Date(value.trim().replace(' ', 'T')).getTime();
-  return Number.isFinite(millis) ? millis : Number.NaN;
+  return fromLocalInput(value) ?? Number.NaN;
 };
 
-export function mapRow(raw: Record<string, string>, index: number): ParsedRow {
+export function mapRow(raw: Partial<Record<CsvColumn, string>>, index: number): ParsedRow {
   const lat = raw.lat?.trim();
   const lng = raw.lng?.trim();
   const windowStart = parseTime(raw.windowStart);
@@ -141,14 +241,14 @@ export function mapRow(raw: Record<string, string>, index: number): ParsedRow {
       rowNumber,
       raw,
       input: null,
-      error: 'Time window must look like 2026-01-31 14:00.',
+      error: 'Time window must look like 2026-11-21 07:00 (Toronto time).',
       needsGeocoding: false,
     };
   }
 
   const result = validateDeliveryInput({
     ...raw,
-    location: lat && lng ? { lat, lng } : null,
+    location: lat && lng ? { lat: Number(lat), lng: Number(lng) } : null,
     windowStart,
     windowEnd,
     driverId: null,

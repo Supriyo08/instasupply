@@ -8,12 +8,13 @@
     "dev": "vite",
     "build": "tsc --noEmit -p . && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p test",
+    "test": "TSX_TSCONFIG_PATH=test/tsconfig.json tsx --import ./test/support/register.mjs --test test/*.test.ts test/*.test.tsx"
   },
   "dependencies": {
+    "@instasupply/api-client": "*",
     "@instasupply/art": "*",
     "@instasupply/shared": "*",
-    "firebase": "^13.4.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.76.0",
     "papaparse": "^5.7.1",

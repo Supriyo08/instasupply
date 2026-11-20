@@ -16,7 +16,7 @@ import { createExpoClient, type PushClient } from './platform/push/expo';
 import { Scheduler } from './platform/scheduler/scheduler';
 import { createSms, type SmsSender } from './platform/sms/sms';
 import { createStorage, type Storage } from './platform/storage/storage';
-import { loggerOptions } from './platform/logger';
+import { loggerOptions, prettyAvailable } from './platform/logger';
 
 /** Named places a test can hold a request at (§12.3); a no-op in production. */
 export interface Hooks {
@@ -42,7 +42,10 @@ export interface Deps {
 }
 
 export function createLogger(config: Config): Logger {
-  return pino(loggerOptions(config));
+  const log = pino(loggerOptions(config));
+  if (config.LOG_PRETTY && !prettyAvailable())
+    log.warn('LOG_PRETTY is set but pino-pretty is not installed; logging JSON');
+  return log;
 }
 
 export function createDeps(config: Config, overrides: Partial<Deps> = {}): Deps {

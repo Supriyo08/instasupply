@@ -1,4 +1,4 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
 import type { Role } from '@instasupply/shared';
 import { useState } from 'react';
 
@@ -15,20 +15,22 @@ const ROLE_LABEL: Record<Role, string> = {
   dispatcher: 'Dispatcher',
   driver: 'Driver',
   customer: 'Customer',
+  supplier: 'Supplier',
 };
 
-/** A driver or staff login opened the shopping app; explain and offer to sign out. */
+/** A driver, supplier or staff login opened the customer app; explain and offer to sign out. */
 export default function WrongAccountScreen() {
-  const { user, profile, claims } = useSession();
+  const { user, profile } = useSession();
   const [busy, setBusy] = useState(false);
-  const role = claims.role ?? profile?.role ?? null;
+  const role = profile?.role ?? null;
   const isDriver = role === 'driver';
+  const isSupplier = role === 'supplier';
 
   const leave = async () => {
     setBusy(true);
     try {
       await signOut();
-      // The router returns to the welcome screen once signed out.
+      // The router returns to the shop as a guest once signed out.
     } catch (error) {
       notify('Could not sign out', describeError(error));
       setBusy(false);
@@ -42,12 +44,20 @@ export default function WrongAccountScreen() {
       footer={<Button label="Sign out" icon="log-out" loading={busy} onPress={() => void leave()} />}
     >
       <StepHeading
-        icon={isDriver ? 'truck' : 'briefcase'}
-        title={isDriver ? 'This is a driver account' : 'This is a staff account'}
+        icon={isDriver ? 'truck' : isSupplier ? 'home' : 'briefcase'}
+        title={
+          isDriver
+            ? 'This is a driver account'
+            : isSupplier
+              ? 'This is a supplier account'
+              : 'This is a staff account'
+        }
         subtitle={
           isDriver
-            ? "Driver logins deliver orders in the InstaSupply Driver app, so they can't be used for shopping."
-            : "Staff logins manage deliveries in the InstaSupply back office, so they can't be used for shopping."
+            ? "Driver logins deliver orders in the InstaSupply Driver app, so they can't be used to order."
+            : isSupplier
+              ? "Supplier logins run your store in the InstaSupply web portal, so they can't be used to order."
+              : "Staff logins work in the InstaSupply console, so they can't be used to order."
         }
       />
       <AccountCard
@@ -57,7 +67,7 @@ export default function WrongAccountScreen() {
       />
       <Notice
         tone="info"
-        title="Want to shop with us?"
+        title="Want to order supplies?"
         message="Sign out, then log in with your customer account or create one with a different email address."
       />
     </StepScreen>

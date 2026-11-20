@@ -1,4 +1,4 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
 import { router } from 'expo-router';
 import { useState } from 'react';
 

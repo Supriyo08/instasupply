@@ -1,11 +1,18 @@
-import { ORDER_STATUS_META, type Order, type OrderStatus } from '@instasupply/shared';
+import {
+  ORDER_STATUS_META,
+  STORE_ORDER_META,
+  type Fulfilment,
+  type OrderStatus,
+  type PaymentStatus,
+  type StoreOrderStatus,
+} from '@instasupply/shared';
 
 import { Badge } from '@/components/ui/Badge';
-import { CardIcon, CashIcon } from '@/components/ui/icons';
+import { StoreIcon, TruckIcon, WarningIcon } from '@/components/ui/icons';
 
-import { paymentMethodLabel, paymentStatusMeta } from '../order-format';
+import { FULFILMENT_LABELS, PAYMENT_STATUS_META } from '../order-format';
 
-/** Order status in the shopper's words, coloured with the shared status tone. */
+/** Parent order status: the colour of the store-order status it stands for (§2.2). */
 export function OrderStatusBadge({ status, className }: { status: OrderStatus; className?: string }) {
   const meta = ORDER_STATUS_META[status];
   return (
@@ -15,20 +22,46 @@ export function OrderStatusBadge({ status, className }: { status: OrderStatus; c
   );
 }
 
-/** Compact payment chip: "COD · To collect", "Card •••• 4242 · Paid". */
-export function PaymentBadge({
-  order,
+/** Store order status in the supplier and staff wording ("New", "Delivery failed"), §2.1. */
+export function StoreOrderStatusBadge({
+  status,
   className,
 }: {
-  order: Pick<Order, 'status' | 'paymentMethod' | 'paymentStatus' | 'card'>;
+  status: StoreOrderStatus;
   className?: string;
 }) {
-  const meta = paymentStatusMeta(order);
-  const Icon = order.paymentMethod === 'cod' ? CashIcon : CardIcon;
+  const meta = STORE_ORDER_META[status];
+  return (
+    <Badge tone={meta.tone} dot className={className}>
+      {meta.label}
+    </Badge>
+  );
+}
+
+export function PaymentBadge({ status, className }: { status: PaymentStatus; className?: string }) {
+  const meta = PAYMENT_STATUS_META[status];
   return (
     <Badge tone={meta.tone} className={className}>
+      {meta.label}
+    </Badge>
+  );
+}
+
+export function FulfilmentBadge({ fulfilment }: { fulfilment: Fulfilment }) {
+  const Icon = fulfilment === 'delivery' ? TruckIcon : StoreIcon;
+  return (
+    <Badge tone="neutral">
       <Icon size={12} aria-hidden />
-      {paymentMethodLabel(order)} · {meta.label}
+      {FULFILMENT_LABELS[fulfilment]}
+    </Badge>
+  );
+}
+
+export function AttentionBadge({ label = 'Needs attention' }: { label?: string }) {
+  return (
+    <Badge tone="danger">
+      <WarningIcon size={12} aria-hidden />
+      {label}
     </Badge>
   );
 }

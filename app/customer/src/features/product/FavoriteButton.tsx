@@ -1,34 +1,43 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
+import { usePathname } from 'expo-router';
 import { useRef } from 'react';
 import { Animated, Pressable, StyleSheet } from 'react-native';
 
 import { FilledIcon, Icon } from '@/components/ui';
 import { useFavorites } from '@/features/favorites/FavoritesProvider';
+import { goToSignIn } from '@/features/session/RequireAccount';
+import { useUid } from '@/features/session/SessionProvider';
 import { notify } from '@/lib/notify';
 import { colors } from '@/theme/tokens';
 
 import { NATIVE_DRIVER } from './constants';
 
-/** Heart toggle for the product page, with a small "pop" when tapped. */
+/** 🔒 Save toggle for the product page, with a small "pop"; guests are sent to sign in. */
 export function FavoriteButton({ productId, name }: { productId: string; name: string }) {
   const favorites = useFavorites();
+  const uid = useUid();
+  const pathname = usePathname();
   const active = favorites.isFavorite(productId);
   const scale = useRef(new Animated.Value(1)).current;
 
   const onPress = () => {
+    if (!uid) {
+      goToSignIn(pathname);
+      return;
+    }
     Animated.sequence([
       Animated.timing(scale, { toValue: 1.3, duration: 110, useNativeDriver: NATIVE_DRIVER }),
       Animated.spring(scale, { toValue: 1, friction: 3, useNativeDriver: NATIVE_DRIVER }),
     ]).start();
     favorites
       .toggle(productId)
-      .catch((error: unknown) => notify("Couldn't update favorites", describeError(error)));
+      .catch((error: unknown) => notify("Couldn't update saved items", describeError(error)));
   };
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={active ? `Remove ${name} from favorites` : `Save ${name} to favorites`}
+      accessibilityLabel={active ? `Remove ${name} from saved items` : `Save ${name}`}
       accessibilityState={{ selected: active }}
       hitSlop={10}
       onPress={onPress}

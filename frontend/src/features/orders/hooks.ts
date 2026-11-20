@@ -1,66 +1,39 @@
 /**
- * Realtime shop-order queries. Every multi-field query here is backed by an index in
- * firebase/firestore.indexes.json (status + createdAt desc); the rest are single-field.
- * Open orders come from `useOpenOrders` in lib/data (shared with the sidebar badge).
+ * Marketplace order data for the ops Orders screens (MARKETPLACE §9, CLIENTS §4.5): parent orders,
+ * the store orders inside them, and the staff-only private meta. Lists are paged and live; the server
+ * applies every filter (status, storeId, customerId, needsAttention, acceptOverdue, …).
  */
-import { COLLECTIONS, type Order, type OrderStatus } from '@instasupply/shared';
-import { Timestamp, collection, doc, limit, orderBy, query, where } from 'firebase/firestore';
-import { useMemo } from 'react';
+import type { QueryValue } from '@instasupply/api-client';
+import { useLiveQuery, usePagedQuery } from '@instasupply/api-client/react';
 
-import { db } from '@/lib/firebase/app';
-import { useCollection, useDocument } from '@/lib/firebase/hooks';
+import { queries } from '@/lib/api';
 
-/** History lists (needs attention, delivered, cancelled, all) show this many of the newest orders. */
-export const ORDER_LIST_LIMIT = 300;
+export type OrderFilters = Record<string, QueryValue>;
 
-/** Safety cap for today's KPIs, far above a normal day's volume. */
-export const TODAY_LIMIT = 1000;
+/** Parent orders, newest first (`GET /orders`). */
+export function useOpsOrders(filters: OrderFilters = {}) {
+  return usePagedQuery(queries.opsOrders(filters));
+}
+
+/** Store orders across stores, newest first (`GET /store-orders`). */
+export function useOpsStoreOrders(filters: OrderFilters = {}) {
+  return usePagedQuery(queries.opsStoreOrders(filters));
+}
 
 export function useOrder(orderId: string | null | undefined) {
-  const ref = useMemo(() => (orderId ? doc(db, COLLECTIONS.orders, orderId) : null), [orderId]);
-  return useDocument<Order>(ref);
+  return useLiveQuery(queries.order(orderId));
 }
 
-/** Newest orders in one status. `null` loads nothing. */
-export function useOrdersWithStatus(status: OrderStatus | null) {
-  const q = useMemo(
-    () =>
-      status
-        ? query(
-            collection(db, COLLECTIONS.orders),
-            where('status', '==', status),
-            orderBy('createdAt', 'desc'),
-            limit(ORDER_LIST_LIMIT),
-          )
-        : null,
-    [status],
-  );
-  return useCollection<Order>(q);
+/** The store orders of one parent order. */
+export function useOrderStoreOrders(orderId: string | null | undefined) {
+  return useLiveQuery(queries.orderStoreOrders(orderId));
 }
 
-/** Newest orders in any status. Loads nothing until `enabled`. */
-export function useLatestOrders(enabled: boolean) {
-  const q = useMemo(
-    () =>
-      enabled
-        ? query(collection(db, COLLECTIONS.orders), orderBy('createdAt', 'desc'), limit(ORDER_LIST_LIMIT))
-        : null,
-    [enabled],
-  );
-  return useCollection<Order>(q);
+export function useStoreOrder(storeOrderId: string | null | undefined) {
+  return useLiveQuery(queries.storeOrder(storeOrderId));
 }
 
-/** Every order placed since `sinceMillis` (e.g. local midnight), newest first. */
-export function useOrdersSince(sinceMillis: number) {
-  const q = useMemo(
-    () =>
-      query(
-        collection(db, COLLECTIONS.orders),
-        where('createdAt', '>=', Timestamp.fromMillis(sinceMillis)),
-        orderBy('createdAt', 'desc'),
-        limit(TODAY_LIMIT),
-      ),
-    [sinceMillis],
-  );
-  return useCollection<Order>(q);
+/** Pickup PIN state and payment references of a store order (staff only). */
+export function useStoreOrderPrivate(storeOrderId: string | null | undefined) {
+  return useLiveQuery(queries.storeOrderPrivate(storeOrderId));
 }

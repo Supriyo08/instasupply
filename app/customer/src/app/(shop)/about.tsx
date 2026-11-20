@@ -1,116 +1,108 @@
-import { describeError } from '@instasupply/expo-firebase';
-import { useState } from 'react';
+import { useConfig } from '@instasupply/api-client/react';
+import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 
-import { Badge, Button, Header, Icon, Input, Screen, Text } from '@/components/ui';
-import { Avatar } from '@/features/account/Avatar';
-import { displayPhone, memberSince } from '@/features/account/format';
-import { FormSection } from '@/features/account/FormSection';
-import { PasswordResetCard } from '@/features/account/PasswordResetCard';
-import { cleanDisplayName, updateDisplayName } from '@/features/account/profile-service';
-import { useToast } from '@/features/notifications/ToastProvider';
-import { useCustomer } from '@/features/session/SessionProvider';
-import { notify } from '@/lib/notify';
-import { colors } from '@/theme/tokens';
+import { ArtImage, Card, Header, Icon, Screen, Text, type IconName } from '@/components/ui';
+import { MenuGroup } from '@/features/account/MenuGroup';
+import { appVersion, env } from '@/lib/env';
+import { colors, radius, spacing } from '@/theme/tokens';
 
-/** "About me": edit the display name; email and verified phone are read-only. */
+const POINTS: { icon: IconName; title: string; body: string }[] = [
+  {
+    icon: 'search',
+    title: 'One search, local suppliers',
+    body: 'Live stock and prices from lumber yards, plumbing and electrical supply houses across the GTA.',
+  },
+  {
+    icon: 'truck',
+    title: 'Delivered to your jobsite',
+    body: 'Drop a pin for a new build, pick ASAP or a 2-hour window, and track every truck live.',
+  },
+  {
+    icon: 'shopping-bag',
+    title: 'Or ready for pickup',
+    body: 'Skip the line: the store packs your order and you show a PIN at the counter.',
+  },
+  {
+    icon: 'clipboard',
+    title: 'Send us your material list',
+    body: 'Paste it or snap a photo; we price it with our suppliers, usually within 30 minutes.',
+  },
+];
+
+/** About (MARKETPLACE §7.3): what InstaSupply is, the version and the server it talks to. */
 export default function AboutScreen() {
-  const { user, profile } = useCustomer();
-  const toast = useToast();
-  const [draft, setDraft] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const name = draft ?? profile.displayName;
-  const cleaned = cleanDisplayName(name);
-  const dirty = draft !== null && cleaned !== profile.displayName;
-  const email = profile.email ?? user.email;
-  const since = memberSince(profile.createdAt);
-
-  const save = async () => {
-    if (!cleaned) {
-      setError('Enter your name (at least 2 characters).');
-      return;
-    }
-    if (!dirty) return;
-    setSaving(true);
-    try {
-      await updateDisplayName(user.uid, cleaned);
-      setDraft(null);
-      toast({ title: 'Profile updated', icon: 'check-circle' });
-    } catch (saveError) {
-      notify("Couldn't save your profile", describeError(saveError));
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  const config = useConfig();
+  const environment = config?.environment === 'development' ? ' · development server' : '';
   return (
-    <Screen
-      header={<Header title="About me" />}
-      footer={<Button label="Save settings" loading={saving} disabled={!dirty} onPress={() => void save()} />}
-    >
-      <View style={styles.identity}>
-        <Avatar name={cleaned ?? profile.displayName} size={88} />
-        <Text variant="heading" numberOfLines={1}>
-          {profile.displayName}
+    <Screen header={<Header title="About" />}>
+      <View style={styles.hero}>
+        <View style={styles.circle}>
+          <ArtImage artKey="scene-local-suppliers" width={190} height={150} />
+        </View>
+        <Text variant="display" align="center">
+          InstaSupply
         </Text>
-        {since ? (
-          <Text variant="caption" color="muted">
-            {since}
-          </Text>
-        ) : null}
+        <Text color="muted" align="center">
+          Construction supplies from local Greater Toronto Area stores, delivered to your jobsite or ready for
+          pickup.
+        </Text>
       </View>
-
-      <FormSection title="Personal details">
-        <Input
-          icon="user"
-          placeholder="Full name"
-          value={name}
-          maxLength={80}
-          autoCapitalize="words"
-          autoComplete="name"
-          textContentType="name"
-          returnKeyType="done"
-          error={error}
-          onChangeText={(value) => {
-            setDraft(value);
-            setError(null);
-          }}
-          onSubmitEditing={() => void save()}
-        />
-        <Input
-          icon="mail"
-          placeholder="Email"
-          value={email ?? 'No email on file'}
-          editable={false}
-          style={styles.readOnly}
-          trailing={<Icon name="lock" size={16} color={colors.textSubtle} />}
-        />
-        <Input
-          icon="phone"
-          placeholder="Mobile number"
-          value={displayPhone(profile.phoneNumber) || 'Not added'}
-          editable={false}
-          style={styles.readOnly}
-          trailing={profile.phoneVerified ? <Badge label="Verified" style={styles.badge} /> : null}
-        />
-        <Text variant="caption" color="muted" style={styles.note}>
-          Your email and verified mobile number identify your account and can&apos;t be changed here.
-        </Text>
-      </FormSection>
-
-      <FormSection title="Change password">
-        <PasswordResetCard email={email} />
-      </FormSection>
+      <Card style={styles.points}>
+        {POINTS.map((point) => (
+          <View key={point.title} style={styles.point} accessible>
+            <View style={styles.icon}>
+              <Icon name={point.icon} size={18} color={colors.primaryDark} />
+            </View>
+            <View style={styles.flex}>
+              <Text variant="bodyMedium">{point.title}</Text>
+              <Text variant="caption" color="muted">
+                {point.body}
+              </Text>
+            </View>
+          </View>
+        ))}
+      </Card>
+      <MenuGroup
+        items={[
+          { key: 'help', icon: 'help-circle', label: 'Help & FAQ', onPress: () => router.push('/help') },
+          {
+            key: 'suggest',
+            icon: 'plus-square',
+            label: 'Suggest a store',
+            onPress: () => router.push('/suggest-store'),
+          },
+        ]}
+      />
+      <Text variant="micro" color="subtle" align="center">
+        Version {appVersion}
+        {env.variant !== 'production' ? ` (${env.variant})` : ''}
+        {environment}
+        {config?.hstNumber ? ` · HST no. ${config.hstNumber}` : ''}
+      </Text>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  // Centred in the field's row (Badge aligns itself to the start by default).
-  badge: { alignSelf: 'center' },
-  identity: { alignItems: 'center', gap: 4, paddingVertical: 4 },
-  note: { paddingHorizontal: 2 },
-  readOnly: { color: colors.textMuted },
+  circle: {
+    alignItems: 'center',
+    backgroundColor: colors.primaryTint,
+    borderRadius: radius.pill,
+    height: 200,
+    justifyContent: 'center',
+    width: 200,
+  },
+  flex: { flex: 1, gap: 1 },
+  hero: { alignItems: 'center', gap: spacing.sm },
+  icon: {
+    alignItems: 'center',
+    backgroundColor: colors.primarySoft,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  point: { alignItems: 'flex-start', flexDirection: 'row', gap: spacing.md },
+  points: { gap: spacing.lg },
 });

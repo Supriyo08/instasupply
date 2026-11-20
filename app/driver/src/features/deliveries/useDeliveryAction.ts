@@ -4,10 +4,11 @@ import { useCallback, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 
 import { usePresence } from '@/features/location/PresenceProvider';
-import { describeError } from '@/lib/errors';
+import { describeError } from '@/lib/api';
 
 import { updateStatus } from './actions';
 
+/** A one-button alert that also works on the web (Alert.alert with buttons does nothing there). */
 export function notify(title: string, message: string) {
   if (Platform.OS === 'web') window.alert(`${title}\n\n${message}`);
   else Alert.alert(title, message);

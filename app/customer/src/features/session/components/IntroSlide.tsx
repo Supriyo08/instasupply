@@ -15,19 +15,18 @@ export interface IntroSlideContent {
 export const INTRO_SLIDES: readonly IntroSlideContent[] = [
   {
     art: 'scene-jobsite-delivery',
-    title: 'Building supplies\non your jobsite',
-    subtitle: 'Lumber, drywall, fasteners and more from local suppliers, brought to where you are working.',
+    title: 'Order building supplies\non your jobsite',
+    subtitle: 'Lumber, drywall, fasteners and more from local GTA suppliers, brought to where you work.',
   },
   {
     art: 'scene-local-suppliers',
-    title: 'One search across\nlocal suppliers',
+    title: 'One search across\nlocal suppliers, live stock',
     subtitle: 'Compare prices and live stock at stores near your site, and buy from several in one order.',
   },
   {
     art: 'scene-live-tracking',
-    title: 'Delivered or ready\nfor pickup',
-    subtitle:
-      'Same-day delivery to your site or pickup nearby. Track every step from the store to the drop-off.',
+    title: 'Delivered to your site\nor ready for pickup',
+    subtitle: 'Track every step, from the store counter to the drop-off on your site.',
   },
 ];
 

@@ -177,3 +177,8 @@
   color: #fff;
   box-shadow: 0 3px 10px rgb(15 23 42 / 0.35);
 }
+.is-home--active {
+  box-shadow:
+    0 0 0 4px rgb(99 102 241 / 0.35),
+    0 3px 10px rgb(15 23 42 / 0.35);
+}

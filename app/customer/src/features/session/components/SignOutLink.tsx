@@ -1,4 +1,4 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 

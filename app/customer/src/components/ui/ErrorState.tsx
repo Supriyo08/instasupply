@@ -1,4 +1,4 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
 import { StyleSheet, View } from 'react-native';
 
 import { colors } from '@/theme/tokens';

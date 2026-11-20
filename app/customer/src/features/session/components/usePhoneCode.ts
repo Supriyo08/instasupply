@@ -1,4 +1,4 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError, errorStatusOf, isNetworkError } from '@instasupply/api-client';
 import { useRef, useState } from 'react';
 
 import { verifyPhoneCode } from '@/features/session/auth-service';
@@ -7,18 +7,9 @@ import { useCountdown } from './motion';
 import { CODE_LENGTH } from './OtpInput';
 import { forgetCodeRequest, formatPhone, nextResendAt, resendAt, sendPhoneCode } from './phone';
 
-/** Firebase error code (`auth/...`, `functions/...`), when there is one. */
-function errorCode(error: unknown): string | null {
-  if (!error || typeof error !== 'object' || !('code' in error)) return null;
-  return typeof error.code === 'string' ? error.code : null;
-}
-
 /** Connection problems keep the typed code so the user can simply retry; anything else clears it. */
 function keepsCode(error: unknown) {
-  const code = errorCode(error);
-  return (
-    !code || code === 'functions/unavailable' || code === 'functions/internal' || code.includes('network')
-  );
+  return isNetworkError(error) || errorStatusOf(error) === 'internal';
 }
 
 /**

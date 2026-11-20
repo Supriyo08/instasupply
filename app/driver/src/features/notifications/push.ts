@@ -1,24 +1,50 @@
-import { COLLECTIONS, type PushProvider } from '@instasupply/shared';
+/**
+ * Expo push registration (docs/CLIENTS.md §6.2, §6.3). Every push API sits behind `pushAvailability()`,
+ * so an APK without google-services.json or EAS_PROJECT_ID never calls one and never throws.
+ * `push.web.ts` replaces this file on the web, which keeps expo-notifications out of that bundle.
+ */
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import { deleteDoc, doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { Platform } from 'react-native';
 
+import { api, isNetworkError } from '@/lib/api';
 import { appVersion, easProjectId } from '@/lib/env';
-import { db } from '@/lib/firebase';
-import { getInstallationId } from '@/lib/installation';
+
+import { pushAvailability } from './push-availability';
+
+// Foreground presentation, set at startup (this module is loaded by the root layout), so onboarding
+// behaves like the signed-in area: the in-app banner covers foreground alerts (§6.4 step 1). Safe in Expo Go.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: false,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 export type PushRegistration =
-  | { status: 'registered'; provider: PushProvider }
-  | { status: 'denied' }
-  | { status: 'unsupported'; reason: string };
+  | { status: 'registered' }
+  | { status: 'denied'; canAskAgain: boolean }
+  | { status: 'unavailable'; reason: 'web' | 'expo_go' | 'not_configured' | 'token_failed' };
 
-/** Android channels must exist before asking for permission (Android 13+). Ids match the backend. */
-async function ensureChannels() {
+/**
+ * Android channels (§6.6). Ids equal the server's `channelFor`. Importance is fixed at creation:
+ * a different importance later needs a new id. Created before any permission request (Android 13+).
+ */
+export async function ensureChannels(): Promise<void> {
   if (Platform.OS !== 'android') return;
+  await Notifications.setNotificationChannelAsync('jobs', {
+    name: 'New jobs',
+    description: 'Job offers near you and changes to them',
+    importance: Notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 250, 150, 250],
+    lightColor: '#4F46E5',
+    sound: 'default',
+  });
   await Notifications.setNotificationChannelAsync('assignments', {
-    name: 'New deliveries',
-    description: 'Assignments, cancellations and route changes',
+    name: 'Assignments',
+    description: 'Jobs dispatch gives you, removes or cancels',
     importance: Notifications.AndroidImportance.MAX,
     vibrationPattern: [0, 250, 150, 250],
     lightColor: '#4F46E5',
@@ -30,66 +56,65 @@ async function ensureChannels() {
     sound: 'default',
   });
   await Notifications.setNotificationChannelAsync('updates', {
-    name: 'Delivery updates',
+    name: 'Updates',
+    description: 'Payouts, vehicle reviews and your account',
     importance: Notifications.AndroidImportance.DEFAULT,
   });
 }
 
-async function saveDevice(uid: string, token: string, provider: PushProvider) {
-  const installationId = await getInstallationId();
-  await setDoc(
-    doc(db, COLLECTIONS.users, uid, COLLECTIONS.devices, installationId),
-    {
+/** `prompt: false` registers only when permission was granted earlier. */
+export async function registerForPush(options: { prompt: boolean }): Promise<PushRegistration> {
+  const availability = pushAvailability();
+  if (!availability.available) return { status: 'unavailable', reason: availability.reason };
+
+  await ensureChannels();
+  let permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted && options.prompt && permission.canAskAgain) {
+    permission = await Notifications.requestPermissionsAsync();
+  }
+  if (!permission.granted) return { status: 'denied', canAskAgain: permission.canAskAgain };
+
+  let token: string;
+  try {
+    token = (await Notifications.getExpoPushTokenAsync({ projectId: easProjectId })).data;
+  } catch {
+    // Offline at first start, or wrong credentials in the build: tried again at the next start.
+    return { status: 'unavailable', reason: 'token_failed' };
+  }
+
+  try {
+    await api.devices.register({
       token,
-      provider,
+      provider: 'expo',
       platform: Platform.OS === 'ios' ? 'ios' : 'android',
       appVersion,
       deviceName: Device.deviceName ?? Device.modelName ?? null,
-      createdAt: serverTimestamp(),
-      lastSeenAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
+    });
+  } catch (error) {
+    // A network failure is retried at the next start; anything else means the body and the server
+    // disagree, which must never be swallowed silently (§6.2 step 5).
+    if (!isNetworkError(error)) console.warn('[push] device registration failed', error);
+    throw error;
+  }
+  return { status: 'registered' };
 }
 
-/**
- * Register this device for push. Uses an Expo push token when an EAS project id is configured
- * (works for iOS and Android), otherwise the native FCM token on Android builds.
- */
-export async function registerForPush(uid: string): Promise<PushRegistration> {
-  if (Platform.OS === 'web')
-    return { status: 'unsupported', reason: 'Push is not available in the browser.' };
-  if (!Device.isDevice) return { status: 'unsupported', reason: 'Push needs a physical device.' };
-
-  await ensureChannels();
-  const current = await Notifications.getPermissionsAsync();
-  let granted = current.granted;
-  if (!granted && current.canAskAgain) granted = (await Notifications.requestPermissionsAsync()).granted;
-  if (!granted) return { status: 'denied' };
-
-  try {
-    if (easProjectId) {
-      const { data } = await Notifications.getExpoPushTokenAsync({ projectId: easProjectId });
-      await saveDevice(uid, data, 'expo');
-      return { status: 'registered', provider: 'expo' };
-    }
-    if (Platform.OS === 'android') {
-      const { data } = await Notifications.getDevicePushTokenAsync();
-      await saveDevice(uid, String(data), 'fcm');
-      return { status: 'registered', provider: 'fcm' };
-    }
-    return { status: 'unsupported', reason: 'Set EAS_PROJECT_ID to enable push on iOS.' };
-  } catch {
-    // Expo Go on Android, or a build without google-services.json.
-    return { status: 'unsupported', reason: 'Push needs a development or production build.' };
-  }
+/** Subscribes to token rotation (guarded by availability). Returns the unsubscribe. */
+export function onPushTokenChange(listener: () => void): () => void {
+  if (!pushAvailability().available) return () => undefined;
+  const subscription = Notifications.addPushTokenListener(listener);
+  return () => subscription.remove();
 }
 
-/** Stop pushes to this device (called on sign-out). */
-export async function unregisterDevice(uid: string) {
-  try {
-    await deleteDoc(doc(db, COLLECTIONS.users, uid, COLLECTIONS.devices, await getInstallationId()));
-  } catch {
-    // Best effort.
-  }
+/** Turns pushes to this device off without signing out. Sign-out does not need it (§2.5). */
+export async function unregisterDevice(): Promise<void> {
+  await api.devices.unregister();
+}
+
+/** The current permission, for the profile screen's notification note. */
+export async function pushPermission(): Promise<'granted' | 'ask' | 'blocked' | 'unavailable'> {
+  if (!pushAvailability().available) return 'unavailable';
+  const permission = await Notifications.getPermissionsAsync();
+  if (permission.granted) return 'granted';
+  return permission.canAskAgain ? 'ask' : 'blocked';
 }

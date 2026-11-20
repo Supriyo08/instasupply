@@ -46,6 +46,13 @@ export class LiveHub {
   private readonly clients = new Set<Client>();
   private readonly byTopic = new Map<string, Set<Client>>();
   private timer: NodeJS.Timeout | null = null;
+  /**
+   * Revocations that arrived while an auth frame was between its session read and `client.actor = …`:
+   * control() cannot match such a socket yet, so onAuth checks this log once its awaits are done. Kept only
+   * while some auth is pending, so it never grows.
+   */
+  private pendingAuths = 0;
+  private controlLog: ControlMessage[] = [];
 
   bind(deps: Deps): void {
     this.deps = deps;
@@ -184,7 +191,19 @@ export class LiveHub {
   }
 
   private async onAuth(client: Client, token: string): Promise<void> {
+    this.pendingAuths += 1;
+    const seen = this.controlLog.length;
+    try {
+      await this.authenticate(client, token, seen);
+    } finally {
+      this.pendingAuths -= 1;
+      if (this.pendingAuths === 0) this.controlLog = [];
+    }
+  }
+
+  private async authenticate(client: Client, token: string, seen: number): Promise<void> {
     const auth = await authenticateToken(this.d, token);
+    await this.d.hooks.at('live:afterSessionRead');
     if (!auth.actor) {
       const reason = String(auth.failure?.details.reason ?? 'token_invalid');
       if (reason === 'account_suspended' || reason === 'session_revoked') {
@@ -205,7 +224,20 @@ export class LiveHub {
       if (sockets >= MAX_SOCKETS_PER_USER) return this.close(client, CLOSE.policy, 'too many sockets');
     }
     const verified = await verifyAccessToken(this.d.config, token, this.d.clock.now());
-    client.actor = auth.actor;
+    const actor = auth.actor;
+    const revoked = this.controlLog
+      .slice(seen)
+      .find(
+        (message) =>
+          (message.ctl === 'drop_user' && message.uid === actor.uid) ||
+          (message.ctl === 'drop_session' && message.sid === actor.sessionId),
+      );
+    if (revoked) {
+      this.send(client, { type: 'error', status: 'unauthenticated', reason: 'session_revoked' });
+      return this.close(client, CLOSE.revoked, revoked.ctl);
+    }
+    if (!this.clients.has(client)) return;
+    client.actor = actor;
     client.tokenExp = verified.ok ? verified.exp : this.d.clock.now();
     // Re-evaluate every private subscription for the (possibly changed) account state.
     const dropped: { topic: string; reason: DenyReason }[] = [];
@@ -273,6 +305,7 @@ export class LiveHub {
   }
 
   private control(message: ControlMessage): void {
+    if (this.pendingAuths > 0) this.controlLog.push(message);
     for (const client of [...this.clients]) {
       const match =
         (message.ctl === 'drop_user' && client.actor?.uid === message.uid) ||
@@ -298,13 +331,14 @@ export class LiveHub {
     if (!this.deps) return;
     const now = this.d.clock.now();
     for (const client of [...this.clients]) {
+      // Expiry first: the client must refresh (4401) rather than merely reconnect.
+      if (client.tokenExp !== null && now > client.tokenExp + EXPIRY_GRACE_MS) {
+        this.close(client, CLOSE.tokenInvalid, 'token_expired');
+        continue;
+      }
       if (now - client.lastFrameAt > IDLE_TIMEOUT_MS) {
         // 1012 and not 1008: an idle tab should reconnect with backoff, not wait five minutes.
         this.close(client, CLOSE.restarting, 'idle');
-        continue;
-      }
-      if (client.tokenExp !== null && now > client.tokenExp + EXPIRY_GRACE_MS) {
-        this.close(client, CLOSE.tokenInvalid, 'token_expired');
         continue;
       }
       if (now - client.lastPingAt < PROTOCOL_PING_MS) continue;

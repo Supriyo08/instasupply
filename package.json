@@ -25,13 +25,13 @@
     "deploy:backend": "railway up --service backend",
     "deploy:frontend": "railway up --service frontend",
     "smoke": "node scripts/smoke.mjs",
-    "typecheck": "npm --workspace @instasupply/shared run typecheck && npm --workspace @instasupply/art run typecheck && npm --workspace @instasupply/backend run typecheck && npm --workspace @instasupply/frontend run typecheck && npm --workspace @instasupply/customer run typecheck && npm --workspace @instasupply/driver run typecheck",
+    "typecheck": "npm --workspace @instasupply/shared run typecheck && npm --workspace @instasupply/art run typecheck && npm --workspace @instasupply/backend run typecheck && npm --workspace @instasupply/api-client run typecheck && npm --workspace @instasupply/frontend run typecheck && npm --workspace @instasupply/customer run typecheck && npm --workspace @instasupply/driver run typecheck",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:legacy": "node scripts/check-legacy.mjs",
-    "test": "npm --workspace @instasupply/shared run test"
+    "test": "npm --workspace @instasupply/shared run test && npm --workspace @instasupply/api-client run test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

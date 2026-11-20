@@ -13,6 +13,10 @@ const icon =
     <Icon name={name} size={size} color={typeof color === 'string' ? color : undefined} />
   );
 
+/** Today opens first; Jobs sits to its left. */
+export const unstable_settings = { anchor: 'index' };
+
+/** Jobs · Today · Route · Earnings · Dispatch (MARKETPLACE §10). Profile opens from the header avatar. */
 export default function TabsLayout() {
   const { user } = useDriver();
   const { colors } = useTheme();
@@ -29,8 +33,10 @@ export default function TabsLayout() {
         tabBarLabelStyle: { fontWeight: '600' },
       }}
     >
+      <Tabs.Screen name="jobs" options={{ title: 'Jobs', tabBarIcon: icon('briefcase-outline') }} />
       <Tabs.Screen name="index" options={{ title: 'Today', tabBarIcon: icon('today-outline') }} />
       <Tabs.Screen name="route" options={{ title: 'Route', tabBarIcon: icon('map-outline') }} />
+      <Tabs.Screen name="earnings" options={{ title: 'Earnings', tabBarIcon: icon('wallet-outline') }} />
       <Tabs.Screen
         name="chat"
         options={{
@@ -39,7 +45,6 @@ export default function TabsLayout() {
           tabBarBadge: unreadChat > 0 ? unreadChat : undefined,
         }}
       />
-      <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: icon('person-circle-outline') }} />
     </Tabs>
   );
 }

@@ -15,7 +15,7 @@ import { parseClientHeader } from '../../platform/http/context';
 import { hmacHex, randomDigits, safeEqualHex } from '../../platform/crypto';
 import { pgCode, withTransaction, type Tx } from '../../platform/db/tx';
 import { ApiError, invalidArgument, notFound } from '../../platform/http/errors';
-import { consumeAll, hitRateLimit, use } from '../../platform/http/rate-limit';
+import { consumeAll, use } from '../../platform/http/rate-limit';
 import { newId } from '../../platform/ids';
 import { inviteMail, passwordResetMail } from '../../platform/mail/templates';
 import { enqueue } from '../../platform/outbox/outbox';
@@ -262,6 +262,7 @@ export async function changePassword(
   input: { currentPassword: string; newPassword: string },
 ): Promise<void> {
   const { deps } = ctx;
+  await consumeAll(deps, [use('password_change', actor.uid)]);
   const user = await findUserById(deps.pool, actor.uid);
   if (!user?.password_hash || !(await verifyPassword(input.currentPassword, user.password_hash))) {
     if (user) await countFailedLogin(deps.pool, user.id);
@@ -324,44 +325,80 @@ export async function resetPassword(
   const wrong = () => invalidArgument(WRONG_RESET_CODE);
   const user = await findUserByEmail(deps.pool, input.email);
   if (!user) return wrong();
-  const token = await findActiveAuthToken(deps.pool, user.id, 'password_reset');
-  const now = deps.clock.now();
-  if (!token || token.expires_at <= now || token.attempts >= RESET_ATTEMPTS) return wrong();
-  if (
-    !/^\d{6}$/.test(input.code) ||
-    !safeEqualHex(hmacHex('reset', `${user.id}:${input.code}`), token.secret_hash)
-  ) {
-    await countAuthTokenAttempt(deps.pool, token.id);
-    // A business rule, not a flood guard: counted even when RATE_LIMITS_DISABLED is set.
-    const fails = await hitRateLimit(deps, 'reset_fail_user', user.id, RESET_FAILS_PER_DAY, 86_400);
-    if (fails.count === RESET_FAILS_PER_DAY) {
-      await deleteAuthToken(deps.pool, token.id);
-      await withTransaction(deps, (tx) =>
-        notifyStaff(
-          tx,
-          {
-            type: 'system',
-            title: 'Password reset blocked',
-            body: `${user.display_name || 'An account'} entered ${RESET_FAILS_PER_DAY} wrong reset codes today. No new code is sent for 24 hours.`,
-            key: `reset-locked-${user.id}-${dayKey(now)}`,
-          },
-          { adminsOnly: true },
-        ),
-      ).catch((error: unknown) =>
-        ctx.log.error({ err: error }, 'could not alert admins about a reset lockout'),
-      );
+  // Every guess is judged under the user's row lock (rank 1) and the token's lock, and a wrong one is
+  // counted before the answer leaves: parallel guesses queue here, so the caps of 5 per code and 10 per
+  // day hold however many requests arrive at once.
+  const outcome = await withTransaction(deps, async (tx): Promise<'wrong' | 'locked' | 'right'> => {
+    await lockUser(tx, user.id);
+    const token = await findActiveAuthToken(tx, user.id, 'password_reset', true);
+    if (!token || token.expires_at <= tx.now || token.attempts >= RESET_ATTEMPTS) return 'wrong';
+    if ((await resetFailures(tx, user.id)) >= RESET_FAILS_PER_DAY) {
+      await deleteAuthToken(tx, token.id);
+      return 'wrong';
     }
-    return wrong();
+    if (
+      /^\d{6}$/.test(input.code) &&
+      safeEqualHex(hmacHex('reset', `${user.id}:${input.code}`), token.secret_hash)
+    ) {
+      // Claimed now so a second right answer in flight cannot use the same code.
+      await markAuthTokenUsed(tx, token.id);
+      return 'right';
+    }
+    await countAuthTokenAttempt(tx, token.id);
+    // A business rule, not a flood guard: counted even when RATE_LIMITS_DISABLED is set.
+    const fails = await countResetFailure(tx, user.id);
+    if (fails < RESET_FAILS_PER_DAY) return 'wrong';
+    await deleteAuthToken(tx, token.id);
+    return fails === RESET_FAILS_PER_DAY ? 'locked' : 'wrong';
+  });
+  if (outcome === 'locked') {
+    await withTransaction(deps, (tx) =>
+      notifyStaff(
+        tx,
+        {
+          type: 'system',
+          title: 'Password reset blocked',
+          body: `${user.display_name || 'An account'} entered ${RESET_FAILS_PER_DAY} wrong reset codes today. No new code is sent for 24 hours.`,
+          key: `reset-locked-${user.id}-${dayKey(deps.clock.now())}`,
+        },
+        { adminsOnly: true },
+      ),
+    ).catch((error: unknown) =>
+      ctx.log.error({ err: error }, 'could not alert admins about a reset lockout'),
+    );
   }
+  if (outcome !== 'right') return wrong();
+  // scrypt runs outside the locks; the code is already used up, so nothing can race this write.
   const hash = await hashPassword(input.newPassword);
   await withTransaction(deps, async (tx) => {
     await lockUser(tx, user.id);
-    const locked = await findActiveAuthToken(tx, user.id, 'password_reset', true);
-    if (!locked || locked.id !== token.id) return wrong();
     await setPassword(tx, user.id, hash);
-    await markAuthTokenUsed(tx, token.id);
     await revokeAllSessions(tx, user.id, 'password_reset');
   });
+}
+
+/** The account's wrong reset codes in the current 24-hour window (bucket reset_fail_user, §4.6). */
+async function resetFailures(tx: Tx, uid: string): Promise<number> {
+  const { rows } = await tx.query<{ count: number }>(
+    `SELECT count FROM rate_limits WHERE bucket = 'reset_fail_user' AND subject = $1 AND expires_at > $2`,
+    [uid, new Date(tx.now)],
+  );
+  return rows[0]?.count ?? 0;
+}
+
+/** hitRateLimit's upsert, inside the caller's transaction so the count commits with the attempt. */
+async function countResetFailure(tx: Tx, uid: string): Promise<number> {
+  const { rows } = await tx.query<{ count: number }>(
+    `INSERT INTO rate_limits AS r (bucket, subject, count, window_start, expires_at)
+     VALUES ('reset_fail_user', $1, 1, $2, $3)
+     ON CONFLICT (bucket, subject) DO UPDATE SET
+       count        = CASE WHEN r.expires_at <= EXCLUDED.window_start THEN 1 ELSE r.count + 1 END,
+       window_start = CASE WHEN r.expires_at <= EXCLUDED.window_start THEN EXCLUDED.window_start ELSE r.window_start END,
+       expires_at   = CASE WHEN r.expires_at <= EXCLUDED.window_start THEN EXCLUDED.expires_at ELSE r.expires_at END
+     RETURNING count`,
+    [uid, new Date(tx.now), new Date(tx.now + 86_400_000)],
+  );
+  return rows[0]!.count;
 }
 
 // ---------- invites and set-password links (§6.3.8) ----------

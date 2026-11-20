@@ -1,82 +1,99 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
 import type { AppNotification } from '@instasupply/shared';
 import { router, type Href } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, SectionList, StyleSheet, View } from 'react-native';
+import { useCallback, useMemo } from 'react';
+import { ActivityIndicator, Pressable, RefreshControl, SectionList, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { EmptyState, ErrorState, Header, IconButton, Screen, Text } from '@/components/ui';
-import { markAllRead, markRead, notificationHref, useNotifications } from '@/features/notifications/hooks';
-import { groupByDay } from '@/features/orders/components/notification-groups';
-import { NotificationItem } from '@/features/orders/components/NotificationItem';
+import { EmptyState, ErrorState, Header, IconButton, Text, webColumn } from '@/components/ui';
+import { groupByDay } from '@/features/notifications/components/notification-groups';
+import { NotificationItem } from '@/features/notifications/components/NotificationItem';
+import {
+  notificationData,
+  notificationHref,
+  useNotificationActions,
+  useNotifications,
+} from '@/features/notifications/hooks';
 import { SkeletonList } from '@/features/orders/components/Skeletons';
-import { useNow } from '@/features/orders/components/useNow';
+import { RequireAccount } from '@/features/session/RequireAccount';
 import { useCustomer } from '@/features/session/SessionProvider';
+import { useNow } from '@/hooks/useNow';
 import { notify } from '@/lib/notify';
 import { colors, radius, spacing } from '@/theme/tokens';
 
 const INBOX_HREF = '/notifications';
 
-/** Notifications inbox: order updates grouped by day, tap to open the order, "Mark all read". */
+const OPENS: Record<string, string> = {
+  issues: 'Opens the case',
+  quotes: 'Opens the quote',
+  support: 'Opens the support chat',
+  orders: 'Opens the order',
+};
+
+/** What a tapped notification opens, for the hint; null when it stays in the inbox. */
+function opensHint(href: string): string | null {
+  if (href === INBOX_HREF) return null;
+  if (href.includes('/track/')) return 'Opens live tracking';
+  return OPENS[href.split('/')[1] ?? ''] ?? null;
+}
+
+/** Inbox 🔒 (MARKETPLACE §7.3): newest 50, grouped by day; a tap marks read and follows the deep link. */
 export default function NotificationsScreen() {
   return (
-    <Screen
-      header={
+    <RequireAccount title="Notifications">
+      <View style={styles.fill}>
         <Header
           title="Notifications"
           right={
             <IconButton
-              icon="settings"
+              icon="sliders"
               label="Notification settings"
               onPress={() => router.push('/settings')}
             />
           }
         />
-      }
-      scroll={false}
-      contentStyle={styles.body}
-    >
-      <Inbox />
-    </Screen>
+        <Inbox />
+      </View>
+    </RequireAccount>
   );
 }
 
 function Inbox() {
   const { user } = useCustomer();
-  const { data, loading, error, retry, unread } = useNotifications(user.uid);
+  const inbox = useNotifications(user.uid);
+  const { markRead, markAllRead } = useNotificationActions(user.uid);
   const now = useNow(60_000);
   const insets = useSafeAreaInsets();
-  const [markingAll, setMarkingAll] = useState(false);
-  const sections = useMemo(() => groupByDay(data, now), [data, now]);
+  const sections = useMemo(() => groupByDay(inbox.data, now), [inbox.data, now]);
 
-  const open = useCallback((item: AppNotification) => {
-    if (!item.read) void markRead(item.id).catch(() => undefined);
-    const href = notificationHref(item.data);
-    if (href !== INBOX_HREF) router.push(href as Href);
-  }, []);
+  const open = useCallback(
+    (item: AppNotification) => {
+      if (!item.read) void markRead.run(item.id).catch(() => undefined);
+      const href = notificationHref(notificationData(item));
+      if (href !== INBOX_HREF) router.push(href as Href);
+    },
+    [markRead],
+  );
 
   const readAll = async () => {
-    setMarkingAll(true);
     try {
-      await markAllRead(data);
+      await markAllRead.run();
     } catch (cause) {
       notify("Couldn't update notifications", describeError(cause));
-    } finally {
-      setMarkingAll(false);
     }
   };
 
-  if (loading && data.length === 0) {
+  if (inbox.loading && inbox.data.length === 0) {
     return (
-      <View style={styles.padded}>
+      <View style={[styles.padded, webColumn]}>
         <SkeletonList count={5} circle={44} lines={2} />
       </View>
     );
   }
-  if (error) {
+  if (inbox.error && inbox.data.length === 0) {
     return (
-      <View style={styles.padded}>
-        <ErrorState title="Couldn't load notifications" error={error} onRetry={retry} />
+      <View style={[styles.padded, webColumn]}>
+        <ErrorState title="Couldn't load notifications" error={inbox.error} onRetry={inbox.retry} />
       </View>
     );
   }
@@ -89,7 +106,7 @@ function Inbox() {
         <NotificationItem
           item={item}
           now={now}
-          opensOrder={notificationHref(item.data) !== INBOX_HREF}
+          opens={opensHint(notificationHref(notificationData(item)))}
           onPress={open}
         />
       )}
@@ -99,28 +116,32 @@ function Inbox() {
         </Text>
       )}
       ListHeaderComponent={
-        data.length > 0 ? (
+        inbox.data.length > 0 ? (
           <View style={styles.summary}>
             <View style={styles.summaryText}>
-              <Text variant="heading">{unread > 0 ? `${unread} unread` : "You're all caught up"}</Text>
+              <Text variant="heading">
+                {inbox.unread > 0 ? `${inbox.unread} unread` : "You're all caught up"}
+              </Text>
               <Text variant="caption" color="muted">
-                {unread > 0 ? 'Tap an update to see your order' : "We'll let you know as your orders move"}
+                {inbox.unread > 0
+                  ? 'Tap an update to open the order, quote or case'
+                  : "We'll let you know as your orders move"}
               </Text>
             </View>
-            {unread > 0 ? (
+            {inbox.unread > 0 ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Mark all notifications as read"
-                accessibilityState={{ disabled: markingAll, busy: markingAll }}
-                disabled={markingAll}
+                accessibilityState={{ disabled: markAllRead.busy, busy: markAllRead.busy }}
+                disabled={markAllRead.busy}
                 hitSlop={8}
                 onPress={() => void readAll()}
                 style={({ pressed }) => [styles.markAll, pressed ? styles.pressed : null]}
               >
-                {markingAll ? (
+                {markAllRead.busy ? (
                   <ActivityIndicator size="small" color={colors.primary} />
                 ) : (
-                  <Text variant="captionMedium" style={styles.markAllLabel}>
+                  <Text variant="captionMedium" color="primaryDark">
                     Mark all read
                   </Text>
                 )}
@@ -132,12 +153,15 @@ function Inbox() {
       ItemSeparatorComponent={Gap}
       stickySectionHeadersEnabled={false}
       showsVerticalScrollIndicator={false}
-      contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + spacing.xxxl }]}
+      refreshControl={
+        <RefreshControl refreshing={inbox.refreshing} onRefresh={inbox.retry} tintColor={colors.primary} />
+      }
+      contentContainerStyle={[styles.list, webColumn, { paddingBottom: insets.bottom + spacing.xxxl }]}
       ListEmptyComponent={
         <EmptyState
           art="scene-jobsite-delivery"
           title="No notifications yet"
-          message="We'll keep you posted here when your order is confirmed, packed and on its way."
+          message="We'll keep you posted here when a store confirms, your load is packed and the truck is on its way."
         />
       }
     />
@@ -149,34 +173,26 @@ function Gap() {
 }
 
 const styles = StyleSheet.create({
-  body: { paddingTop: 0 },
+  fill: { backgroundColor: colors.background, flex: 1 },
   gap: { height: spacing.sm + 2 },
-  list: { flexGrow: 1, paddingHorizontal: spacing.gutter, paddingTop: spacing.lg },
+  list: { paddingHorizontal: spacing.gutter, paddingTop: spacing.lg },
   markAll: {
-    alignItems: 'center',
     backgroundColor: colors.primarySoft,
     borderRadius: radius.pill,
-    justifyContent: 'center',
-    minHeight: 32,
-    minWidth: 110,
+    minWidth: 104,
     paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
   },
-  markAllLabel: { color: colors.primaryDark },
   padded: { paddingHorizontal: spacing.gutter, paddingTop: spacing.lg },
   pressed: { opacity: 0.7 },
   sectionTitle: {
-    letterSpacing: 0.4,
+    letterSpacing: 0.3,
     paddingBottom: spacing.sm,
+    paddingHorizontal: 2,
     paddingTop: spacing.lg,
     textTransform: 'uppercase',
   },
-  summary: {
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    flexDirection: 'row',
-    gap: spacing.md,
-    padding: spacing.lg,
-  },
-  summaryText: { flex: 1, gap: 1 },
+  summary: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
+  summaryText: { flex: 1 },
 });

@@ -1,240 +1,515 @@
 import {
-  formatCurrency,
-  formatDateTime,
-  isActiveStatus,
+  STATUS_META,
+  failureReasonLabel,
+  formatClockET,
+  formatDateTimeET,
+  formatMoney,
+  formatPhone,
+  isSiteCausedFailure,
   primaryDriverAction,
-  toMillis,
+  requiresPickup,
+  type Delivery,
 } from '@instasupply/shared';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useConfig } from '@instasupply/api-client/react';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { AppMap, fitKeyFor, type MapMarker } from '@/components/map';
 import {
+  Badge,
   Banner,
   Button,
   Card,
+  CheckRow,
   EmptyState,
+  ErrorState,
   IconButton,
   Row,
   Screen,
   SectionHeader,
+  Skeleton,
+  StatusBadge,
   Text,
 } from '@/components/ui';
+import { SceneArt } from '@/features/art/SceneArt';
 import { useDriver } from '@/features/auth/SessionProvider';
+import { checkInAtStore } from '@/features/deliveries/actions';
 import { DeclineSheet } from '@/features/deliveries/DeclineSheet';
-import { DeliveryTags } from '@/features/deliveries/DeliveryCard';
+import { DeliveryStepper, PinCard, ReleaseSheet } from '@/features/deliveries/DeliveryParts';
 import { EventTimeline } from '@/features/deliveries/EventTimeline';
-import { useDelivery, useDeliveryEvents, useRoutePlan } from '@/features/deliveries/hooks';
-import { ProgressSteps } from '@/features/deliveries/ProgressSteps';
-import { useDeliveryAction } from '@/features/deliveries/useDeliveryAction';
+import { useDelivery, useDeliveryEvents, useOrderedStops } from '@/features/deliveries/hooks';
+import { storeHoursText, useStore } from '@/features/deliveries/store';
+import { notify, useDeliveryAction } from '@/features/deliveries/useDeliveryAction';
+import { classLabel, feetText, weightText, windowText } from '@/features/jobs/format';
 import { usePresence } from '@/features/location/PresenceProvider';
-import { RouteMap } from '@/features/route/RouteMap';
+import { driverMarker } from '@/features/route/route-map';
+import { describeError } from '@/lib/api';
 import { callPhone, openNavigation, textPhone } from '@/lib/links';
-import { useTheme } from '@/theme/ThemeProvider';
+import { useNow } from '@/lib/use-now';
 
-export default function DeliveryDetailScreen() {
+/** What the driver should know about unloading at the site (MARKETPLACE §10 "Unloading note"). */
+function unloadingNote(delivery: Delivery): {
+  tone: 'info' | 'warning' | 'success';
+  text: string;
+  phone: string | null;
+} {
+  const unload = delivery.unload;
+  if (unload?.labourer && unload.status === 'booked') {
+    return {
+      tone: 'success',
+      text: `Labourer booked: ${unload.labourerName ?? 'name to follow'} meets you at the site to unload.`,
+      phone: unload.labourerPhone,
+    };
+  }
+  if (unload?.labourer) {
+    return {
+      tone: 'info',
+      text: 'A labourer is being booked for this site. Dispatch confirms the name.',
+      phone: null,
+    };
+  }
+  if (delivery.receiving === 'attended') {
+    return {
+      tone: 'info',
+      text: 'Site crew helps you unload. Ask the person receiving it for the hand-off code.',
+      phone: null,
+    };
+  }
+  if (delivery.load?.heavy) {
+    return {
+      tone: 'warning',
+      text: 'Heavy load and nobody on site: call ops before you unload anything alone.',
+      phone: null,
+    };
+  }
+  return {
+    tone: 'info',
+    text: 'Nobody receives this load: unload where the instructions say and take the drop-off photo.',
+    phone: null,
+  };
+}
+
+/**
+ * One delivery, store to site (MARKETPLACE §10 `delivery/[id]`, CLIENTS §4.6, §7.4). The PIN card and
+ * the store's confirmation update live through `delivery:{id}`. Route order and ETAs come from
+ * `useOrderedStops`, never from the raw plan (R56, R61).
+ */
+export default function DeliveryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useDriver();
-  const { radius } = useTheme();
-  const { data: delivery, loading } = useDelivery(id);
+  const delivery = useDelivery(id);
   const events = useDeliveryEvents(id);
-  const route = useRoutePlan(user.uid);
-  const { lastFix } = usePresence();
+  const { stops } = useOrderedStops(user.uid);
+  const store = useStore(delivery.data?.pickup?.storeId ?? null);
+  const config = useConfig();
+  const presence = usePresence();
+  const now = useNow();
   const { run, busyId } = useDeliveryAction();
+  const [checkingIn, setCheckingIn] = useState(false);
   const [declining, setDeclining] = useState(false);
+  const [releasing, setReleasing] = useState(false);
+  const [ticked, setTicked] = useState<ReadonlySet<number>>(() => new Set());
 
-  const stopNumber = useMemo(() => {
-    const index = route.data?.stops.findIndex((stop) => stop.deliveryId === id) ?? -1;
-    return index >= 0 ? index + 1 : null;
-  }, [route.data, id]);
+  const data = delivery.data;
+  const map = useMemo(() => {
+    if (!data) return null;
+    const markers: MapMarker[] = [];
+    if (data.pickup && requiresPickup(data)) {
+      markers.push({
+        id: 'store',
+        kind: 'store',
+        position: data.pickup.location,
+        title: data.pickup.storeName,
+        tone: 'warning',
+      });
+    }
+    markers.push({ id: 'site', kind: 'site', position: data.location, title: data.address, tone: 'brand' });
+    const fitPoints = markers.map((marker) => marker.position);
+    const driver = driverMarker(presence.lastFix);
+    if (driver) markers.push(driver);
+    return { markers, fit: { key: fitKeyFor(fitPoints), points: markers.map((marker) => marker.position) } };
+  }, [data, presence.lastFix]);
 
-  if (!delivery) {
+  if (delivery.loading) {
     return (
       <Screen edges={[]}>
-        {loading ? null : (
-          <EmptyState
-            icon="cube-outline"
-            title="Delivery unavailable"
-            message="It may have been reassigned or cancelled by dispatch."
-            action={<Button label="Back to today" fullWidth={false} onPress={() => router.back()} />}
-          />
-        )}
+        <Skeleton height={40} />
+        <Skeleton height={180} radius={16} />
+        <Skeleton height={140} radius={16} />
+      </Screen>
+    );
+  }
+  if (delivery.error) {
+    return (
+      <Screen edges={[]}>
+        <ErrorState error={delivery.error} onRetry={delivery.retry} title="Couldn't load this delivery" />
+      </Screen>
+    );
+  }
+  if (!data || !map) {
+    return (
+      <Screen edges={[]}>
+        <EmptyState
+          icon="file-tray-outline"
+          title="This delivery is not on your route"
+          message="It was released, reassigned by dispatch or cancelled by the store."
+          action={<Button label="Back to Today" fullWidth={false} onPress={() => router.dismissTo('/')} />}
+        />
       </Screen>
     );
   }
 
-  const mine = delivery.driverId === user.uid;
-  const active = mine && isActiveStatus(delivery.status);
-  const action = active ? primaryDriverAction(delivery.status) : null;
-  const canReportProblem = active && delivery.status !== 'assigned';
-  const phone = delivery.customer.phone;
+  const pickup = data.pickup;
+  const atStore = requiresPickup(data);
+  const action = primaryDriverAction(data);
+  const busy = busyId === data.id || checkingIn;
+  const pickupStop = stops.find((stop) => stop.key === `${data.id}:pickup`) ?? null;
+  const dropoffStop = stops.find((stop) => stop.key === `${data.id}:dropoff`) ?? null;
+  const supportPhone = config?.supportPhone ?? null;
+  const terminal = data.status === 'delivered' || data.status === 'failed' || data.status === 'cancelled';
+  const canRelease = data.status === 'accepted' && (atStore || !pickup);
+  const canReport = data.status === 'picked_up' || data.status === 'in_transit' || data.status === 'arrived';
+  const note = unloadingNote(data);
+  const hours = storeHoursText(store.data, now);
+  const lines = data.load?.lines ?? [];
 
-  const onPrimary = () => {
-    if (!action) return;
-    if (action.requiresProof) router.push(`/delivery/${delivery.id}/complete`);
-    else void run(delivery.id, action.to);
+  const checkIn = async () => {
+    setCheckingIn(true);
+    try {
+      const position = await presence.currentPosition();
+      await checkInAtStore(data.id, position ? { lat: position.lat, lng: position.lng } : null);
+    } catch (cause) {
+      notify("Couldn't check you in", describeError(cause));
+    } finally {
+      setCheckingIn(false);
+    }
   };
 
-  const footer = active ? (
+  const primary = (() => {
+    if (!action) return null;
+    switch (action.kind) {
+      case 'check_in':
+        return (
+          <Button
+            label={action.label}
+            icon="storefront-outline"
+            size="lg"
+            loading={busy}
+            onPress={() => void checkIn()}
+          />
+        );
+      case 'wait':
+        return <Button label={action.label} icon="hourglass-outline" size="lg" disabled />;
+      case 'show_pin':
+        // The PIN card is the action: nothing to press until the store has typed it in.
+        return null;
+      case 'status':
+        if (action.requiresProof) {
+          return (
+            <Button
+              label={action.label}
+              icon="camera-outline"
+              size="lg"
+              variant="success"
+              onPress={() => router.push(`/delivery/${data.id}/complete`)}
+            />
+          );
+        }
+        return (
+          <Button
+            label={action.label}
+            icon={action.to === 'accepted' ? 'checkmark' : 'arrow-forward'}
+            size="lg"
+            loading={busy}
+            disabled={action.disabled}
+            onPress={() => void run(data.id, action.to)}
+          />
+        );
+    }
+  })();
+
+  const footer = terminal ? null : (
     <>
-      {action ? (
-        <Button
-          label={action.label}
-          size="lg"
-          icon={action.requiresProof ? 'checkmark-done' : 'arrow-forward'}
-          loading={busyId === delivery.id}
-          onPress={onPrimary}
-        />
-      ) : null}
-      {delivery.status === 'assigned' ? (
-        <Button label="Decline" variant="ghost" onPress={() => setDeclining(true)} />
-      ) : null}
-      {canReportProblem ? (
-        <Button
-          label="Report a problem"
-          variant="ghost"
-          icon="alert-circle-outline"
-          onPress={() => router.push(`/delivery/${delivery.id}/fail`)}
-        />
-      ) : null}
+      {primary}
+      <View style={styles.secondary}>
+        {data.status === 'assigned' ? (
+          <Button
+            label="Decline"
+            variant="secondary"
+            style={styles.flex}
+            onPress={() => setDeclining(true)}
+          />
+        ) : null}
+        {canRelease ? (
+          <Button
+            label="Release job"
+            variant="ghost"
+            style={styles.flex}
+            onPress={() => setReleasing(true)}
+          />
+        ) : null}
+        {canReport ? (
+          <Button
+            label="Report a problem"
+            variant="ghost"
+            icon="alert-circle-outline"
+            style={styles.flex}
+            onPress={() => router.push(`/delivery/${data.id}/fail`)}
+          />
+        ) : null}
+      </View>
     </>
-  ) : undefined;
+  );
 
   return (
-    <Screen edges={[]} footer={footer}>
-      <Stack.Screen options={{ title: delivery.orderId }} />
-
-      <RouteMap
-        style={{ ...styles.map, borderRadius: radius.lg }}
-        interactive={false}
-        driver={active && lastFix ? { lat: lastFix.lat, lng: lastFix.lng, heading: lastFix.heading } : null}
-        stops={[
-          {
-            id: delivery.id,
-            location: delivery.location,
-            label: stopNumber ? String(stopNumber) : '•',
-            title: delivery.customer.name,
-            status: delivery.status,
-            highlighted: true,
-          },
-        ]}
-        path={[]}
-      />
-
-      <View style={styles.titleBlock}>
-        <Text variant="title">{delivery.customer.name}</Text>
-        <DeliveryTags delivery={delivery} />
+    <Screen edges={[]} footer={footer} onRefresh={delivery.retry} refreshing={delivery.refreshing}>
+      <View style={styles.headline}>
+        <View style={styles.flex}>
+          <Text variant="title">{data.orderId}</Text>
+          <Text variant="caption" color="muted">
+            {windowText(data.windowStart, data.windowEnd, now)}
+            {data.vehicleClass ? ` · ${classLabel(data.vehicleClass)}` : ''}
+            {data.payout ? ` · ${formatMoney(data.payout.totalCents)}` : ''}
+          </Text>
+        </View>
+        <StatusBadge status={data.status} />
       </View>
-      <ProgressSteps status={delivery.status} />
+      <DeliveryStepper delivery={data} />
 
-      {delivery.status === 'delivered' && delivery.proof ? (
+      {data.status === 'delivered' ? (
         <Banner
           tone="success"
-          title={`Delivered ${formatDateTime(toMillis(delivery.deliveredAt))}`}
+          title="Delivered"
+          message={`${data.deliveredAt ? formatDateTimeET(data.deliveredAt, now) : ''}${data.proof?.recipientName ? ` · received by ${data.proof.recipientName}` : ''}${data.proof?.photoPath ? ' · photo on file' : ''}`}
+        />
+      ) : null}
+      {data.status === 'failed' ? (
+        <Banner
+          tone="danger"
+          title={`Failed: ${failureReasonLabel(data.failure?.reason)}`}
           message={
-            [
-              delivery.proof.recipientName ? `Received by ${delivery.proof.recipientName}` : null,
-              delivery.proof.codCollected != null
-                ? `${formatCurrency(delivery.proof.codCollected)} collected`
-                : null,
-              delivery.proof.photoPath ? 'Photo on file' : null,
-            ]
-              .filter(Boolean)
-              .join(' · ') || 'Proof of delivery recorded.'
+            isSiteCausedFailure(data.failure?.reason)
+              ? 'The site caused it, so you are still paid for the trip. Dispatch decides what happens to the load.'
+              : 'Dispatch decides what happens to the load. Keep it on your vehicle until they call.'
           }
         />
       ) : null}
-      {delivery.status === 'failed' && delivery.failure ? (
+      {data.status === 'cancelled' ? (
         <Banner
-          tone="danger"
-          title="Delivery failed"
-          message={delivery.failure.note ?? 'Dispatch will follow up.'}
+          tone="warning"
+          title={STATUS_META.cancelled.label}
+          message="The store or customer cancelled this order."
         />
       ) : null}
-      {!mine ? <Banner tone="warning" message="This delivery is no longer assigned to you." /> : null}
 
-      <SectionHeader title="Drop-off" />
-      <Card>
-        <Row icon="location-outline" label="Address" value={delivery.address} />
-        {delivery.addressNotes ? (
-          <Row icon="information-circle-outline" label="Directions" value={delivery.addressNotes} />
-        ) : null}
-        {delivery.windowEnd ? (
-          <Row
-            icon="time-outline"
-            label="Delivery window"
-            value={`${delivery.windowStart ? `${formatDateTime(delivery.windowStart)} – ` : 'By '}${formatDateTime(delivery.windowEnd)}`}
-          />
-        ) : null}
-        <View style={styles.contactRow}>
-          <Button
-            label="Navigate"
-            icon="navigate"
-            fullWidth={false}
-            style={styles.flex}
-            onPress={() => void openNavigation(delivery.location, { origin: lastFix })}
-          />
-          {phone ? (
-            <>
+      {!terminal ? (
+        <AppMap
+          markers={map.markers}
+          fit={map.fit}
+          style={styles.map}
+          accessibilityLabel={`Map: ${atStore && pickup ? `${pickup.storeName}, then ` : ''}the site at ${data.address}${presence.lastFix ? ', and your position' : ''}`}
+        />
+      ) : null}
+
+      {pickup && atStore && pickup.arrivedAt != null && pickup.pickupCode ? (
+        <PinCard code={pickup.pickupCode} ready={pickup.ready} />
+      ) : null}
+
+      {pickup ? (
+        <>
+          <SectionHeader title={atStore ? '① Store pickup' : '① Store pickup · done'} />
+          <Card>
+            <View style={styles.blockTop}>
+              <View style={styles.flex}>
+                <Text variant="heading">{pickup.storeName}</Text>
+                <Text color="muted">{pickup.address}</Text>
+              </View>
               <IconButton
                 icon="call"
-                label="Call customer"
+                label={`Call ${pickup.storeName}, ${formatPhone(pickup.phone)}`}
                 tone="success"
-                size={46}
-                onPress={() => void callPhone(phone)}
+                onPress={() => void callPhone(pickup.phone)}
               />
-              <IconButton
-                icon="chatbox-ellipses"
-                label="Text customer"
-                tone="primary"
-                size={46}
-                onPress={() =>
-                  void textPhone(
-                    phone,
-                    `Hi ${delivery.customer.name.split(' ')[0]}, this is your InstaSupply driver.`,
-                  )
+            </View>
+            <View style={styles.badges}>
+              {pickup.collectedAt != null ? (
+                <Badge
+                  label={`Loaded ${formatClockET(pickup.collectedAt)}`}
+                  tone="success"
+                  icon="checkmark"
+                />
+              ) : pickup.ready ? (
+                <Badge label="Ready ✓" tone="success" />
+              ) : (
+                <Badge label={`Being prepared, ready by ${formatClockET(pickup.readyBy)}`} tone="warning" />
+              )}
+              {pickup.arrivedAt != null && pickup.collectedAt == null ? (
+                <Badge label={`Checked in ${formatClockET(pickup.arrivedAt)}`} tone="info" />
+              ) : null}
+              {pickupStop?.etaAt && atStore && pickup.arrivedAt == null ? (
+                <Badge label={`ETA ${formatClockET(pickupStop.etaAt)}`} tone="neutral" />
+              ) : null}
+            </View>
+            {hours ? <Row icon="time-outline" label="Hours" value={hours} /> : null}
+            <Row icon="call-outline" label="Phone" value={formatPhone(pickup.phone)} />
+            {pickup.loadingNotes ? (
+              <Row icon="information-circle-outline" label="Loading notes" value={pickup.loadingNotes} />
+            ) : null}
+            {atStore ? (
+              <Button
+                label="Navigate to the store"
+                icon="navigate"
+                variant="secondary"
+                onPress={() => void openNavigation(pickup.location, { origin: presence.lastFix })}
+              />
+            ) : null}
+          </Card>
+        </>
+      ) : null}
+
+      {data.load && lines.length > 0 && !terminal ? (
+        <>
+          <SectionHeader title={`Load checklist · ${ticked.size}/${lines.length}`} />
+          <Card>
+            <Text variant="caption" color="muted">
+              {data.load.pieces} pieces · {weightText(data.load.weightKg)} · longest{' '}
+              {feetText(data.load.longestCm)}
+              {data.load.hasSheets ? ' · 4×8 sheets' : ''}. Tick each line as it goes on your vehicle; the
+              ticks stay on this phone.
+            </Text>
+            {lines.map((line, index) => (
+              <CheckRow
+                key={`${line.name}-${index}`}
+                label={`${line.quantity} × ${line.name}`}
+                detail={[line.size, `${weightText(line.weightKg * line.quantity)}`]
+                  .filter(Boolean)
+                  .join(' · ')}
+                checked={ticked.has(index)}
+                onToggle={() =>
+                  setTicked((current) => {
+                    const nextSet = new Set(current);
+                    if (nextSet.has(index)) nextSet.delete(index);
+                    else nextSet.add(index);
+                    return nextSet;
+                  })
                 }
               />
-            </>
+            ))}
+          </Card>
+        </>
+      ) : null}
+
+      <SectionHeader title={pickup ? '② Site drop-off' : 'Site drop-off'} />
+      <Card>
+        <View style={styles.blockTop}>
+          <View style={styles.flex}>
+            <Text variant="heading">{data.address}</Text>
+            <Text color="muted">
+              {data.customer.name}
+              {data.customer.phone ? ` · ${formatPhone(data.customer.phone)}` : ''}
+            </Text>
+          </View>
+          {data.customer.phone ? (
+            <View style={styles.contact}>
+              <IconButton
+                icon="chatbubble-outline"
+                label={`Text ${data.customer.name}`}
+                onPress={() => void textPhone(data.customer.phone ?? '')}
+              />
+              <IconButton
+                icon="call"
+                label={`Call ${data.customer.name}`}
+                tone="success"
+                onPress={() => void callPhone(data.customer.phone ?? '')}
+              />
+            </View>
           ) : null}
         </View>
-      </Card>
-
-      <SectionHeader title="Package" />
-      <Card>
-        <Row icon="cube-outline" label="Packages" value={String(delivery.packageCount)} />
-        {delivery.codAmount ? (
-          <Row icon="cash-outline" label="Cash on delivery" value={formatCurrency(delivery.codAmount)} />
+        <View style={styles.badges}>
+          <Badge
+            label={
+              data.receiving === 'attended'
+                ? 'Someone receives it · hand-off code'
+                : 'Unattended · photo drop'
+            }
+            tone={data.receiving === 'attended' ? 'info' : 'neutral'}
+          />
+          {dropoffStop?.etaAt && !terminal ? (
+            <Badge label={`ETA ${formatClockET(dropoffStop.etaAt)}`} tone="neutral" />
+          ) : null}
+        </View>
+        <Row
+          icon="calendar-outline"
+          label="Window"
+          value={windowText(data.windowStart, data.windowEnd, now)}
+        />
+        {data.addressNotes ? (
+          <Row icon="document-text-outline" label="Site instructions" value={data.addressNotes} />
         ) : null}
-        {delivery.requireCode ? (
-          <Row
-            icon="key-outline"
-            label="Hand-off code"
-            value="Ask the customer for the 4-digit code from their tracking page."
+        {!atStore && !terminal ? (
+          <Button
+            label="Navigate to the site"
+            icon="navigate"
+            variant="secondary"
+            onPress={() => void openNavigation(data.location, { origin: presence.lastFix })}
           />
         ) : null}
-        {delivery.notes ? (
-          <Row icon="document-text-outline" label="Notes from dispatch" value={delivery.notes} />
-        ) : null}
       </Card>
+
+      {!terminal ? <Banner tone={note.tone} title="Unloading" message={note.text} /> : null}
+      {!terminal && (note.phone || (note.tone === 'warning' && supportPhone)) ? (
+        <Button
+          label={note.phone ? 'Call the labourer' : 'Call ops'}
+          icon="call-outline"
+          variant="secondary"
+          onPress={() => void callPhone(note.phone ?? supportPhone ?? '')}
+        />
+      ) : null}
+
+      {!terminal ? (
+        <Button
+          label="Message dispatch"
+          icon="chatbubbles-outline"
+          variant="ghost"
+          onPress={() => router.navigate('/chat')}
+        />
+      ) : null}
 
       <SectionHeader title="Activity" />
       <Card>
-        <EventTimeline events={events.data} />
+        {events.loading ? (
+          <Skeleton height={60} />
+        ) : events.error ? (
+          <ErrorState error={events.error} onRetry={events.retry} title="Couldn't load the activity" />
+        ) : (
+          <EventTimeline events={events.data} />
+        )}
       </Card>
 
+      {data.status === 'delivered' ? <SceneArt scene="scene-jobsite-delivery" height={120} /> : null}
+
       <DeclineSheet
-        deliveryId={declining ? delivery.id : null}
+        deliveryId={declining ? data.id : null}
         onClose={() => setDeclining(false)}
-        onDeclined={() => router.back()}
+        onDeclined={() => router.dismissTo('/')}
+      />
+      <ReleaseSheet
+        deliveryId={data.id}
+        visible={releasing}
+        onClose={() => setReleasing(false)}
+        onReleased={() => router.dismissTo('/')}
       />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  contactRow: { alignItems: 'center', flexDirection: 'row', gap: 10, marginTop: 6 },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 8 },
+  blockTop: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
+  contact: { flexDirection: 'row', gap: 8 },
   flex: { flex: 1 },
-  map: { height: 180 },
-  titleBlock: { gap: 8 },
+  headline: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
+  map: { borderRadius: 16, height: 180, overflow: 'hidden' },
+  secondary: { flexDirection: 'row', gap: 8 },
 });

@@ -1,6 +1,6 @@
 /**
- * Design tokens for the customer app, following the "Big Cart" grocery design: fresh lime-green
- * gradient brand, Poppins type, light-grey canvas with white cards and pastel category colours.
+ * Design tokens for the customer app, in the "Big Cart" design language: fresh lime-green gradient
+ * brand, Poppins type, light-grey canvas with white cards and pastel circles behind artwork.
  */
 export const colors = {
   primary: '#6CC51D',
@@ -33,16 +33,23 @@ export const gradient = {
   end: { x: 1, y: 1 },
 };
 
-/** Soft pastel circles placed behind product illustrations, picked per category. */
-export const productBackdrops: Record<string, string> = {
-  fruits: '#FFE9E5',
-  vegetables: '#E6F2EA',
-  beverages: '#FFF6E3',
-  grocery: '#F3EFFA',
-  'edible-oil': '#DCF4F5',
-  household: '#FFE8F2',
-  babycare: '#D2EFFF',
-};
+/**
+ * The pastel behind artwork comes from each category's `tint` (server data, MARKETPLACE §7.1):
+ * use `useCategoryTint(categoryId)` from `@/features/catalog/hooks`. This is the fallback while
+ * categories load or for a product without one.
+ */
+export const fallbackTint = colors.primaryTint;
+
+/** Store-order and delivery status pills (MARKETPLACE §7.1: green marks promises and statuses). */
+export const statusTones = {
+  success: { background: colors.primarySoft, foreground: colors.primaryDark },
+  warning: { background: colors.warningSoft, foreground: colors.warning },
+  danger: { background: colors.dangerSoft, foreground: colors.danger },
+  info: { background: colors.infoSoft, foreground: colors.info },
+  neutral: { background: colors.background, foreground: colors.textMuted },
+} as const;
+
+export type StatusTone = keyof typeof statusTones;
 
 export const fonts = {
   regular: 'Poppins_400Regular',

@@ -3,8 +3,8 @@ import { detectCardBrand, isFutureExpiry, type CardBrand, type SavedCard } from 
 export const CARD_BRAND_LABEL: Record<CardBrand, string> = {
   visa: 'Visa',
   mastercard: 'Mastercard',
-  rupay: 'RuPay',
   amex: 'American Express',
+  discover: 'Discover',
   card: 'Card',
 };
 
@@ -69,8 +69,11 @@ export function expiryLabel(month: number, year: number): string {
   return `${String(month).padStart(2, '0')}/${String(year % 100).padStart(2, '0')}`;
 }
 
-export function isCardExpired(card: Pick<SavedCard, 'expMonth' | 'expYear'>): boolean {
-  return !isFutureExpiry(card.expMonth, card.expYear);
+export function isCardExpired(
+  card: Pick<SavedCard, 'expMonth' | 'expYear'>,
+  now: number = Date.now(),
+): boolean {
+  return !isFutureExpiry(card.expMonth, card.expYear, now);
 }
 
 /** "Visa ending 4242, expires 08/29" for screen readers. */

@@ -1,4 +1,4 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
 import { cleanText } from '@instasupply/shared';
 import { useEffect, useState } from 'react';
 
@@ -38,7 +38,7 @@ export default function CompleteProfileScreen() {
     setBusy(true);
     setError(null);
     try {
-      await completeProfile(cleanText(name, 80) ?? name);
+      await completeProfile({ displayName: cleanText(name, 80) ?? name });
       // The router continues to phone verification once the profile exists.
     } catch (cause) {
       setError(describeError(cause));

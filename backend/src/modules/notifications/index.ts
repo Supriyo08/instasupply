@@ -1,12 +1,26 @@
 /**
- * WAVE-2 PLACEHOLDER written by the platform workstream (docs/PLATFORM.md §15 rule 1). The owner is `money-comms`
- * (§15.2), who replaces the bodies; the exported names and signatures are the frozen ones of §9.1, so other
- * modules compile against them today. Its commands answer internal "not implemented" until the owner registers them with defineCommand.
+ * The notifications module (docs/PLATFORM.md §2.1, §10.2, §15.2 `money-comms`): the inbox writers of §9.1
+ * (notify.ts), the inbox and push-device endpoints of §5.3.3 and `sendTestNotification`. The `push.send` handler and the
+ * receipt job are platform code (platform/push). Other modules call the writers through this barrel.
  */
 import type { FastifyInstance } from 'fastify';
 import type { Deps } from '../../container';
-import { defineStubCommand } from '../../platform/http/command';
+import { registerDeviceRoutes } from './devices.routes';
+import { registerInboxRoutes } from './inbox.routes';
+import { registerTestNotification } from './test-notification';
 
-export function register(_app: FastifyInstance, _deps: Deps): void {
-  defineStubCommand('sendTestNotification', 'money-comms');
+export {
+  notify,
+  notifyDrivers,
+  notifyStaff,
+  notifyStoreMembers,
+  notifyUsers,
+  type NotificationInput,
+} from './notify';
+export { toNotification } from './repository';
+
+export function register(app: FastifyInstance, _deps: Deps): void {
+  registerInboxRoutes(app);
+  registerDeviceRoutes(app);
+  registerTestNotification();
 }

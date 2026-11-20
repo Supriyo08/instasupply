@@ -4,7 +4,7 @@ import { Marker, Polyline, Tooltip } from 'react-leaflet';
 import { useNavigate } from 'react-router';
 
 import { AnimatedMarker, BaseMap, FitBounds, InvalidateOnResize, toLeaflet } from '@/components/map/BaseMap';
-import { driverIcon, stopIcon } from '@/components/map/markers';
+import { driverIcon, stopIcon, storeIcon } from '@/components/map/markers';
 import { statusHex } from '@/components/ui/Badge';
 import { colorIndex } from '@/components/ui/Avatar';
 import {
@@ -53,11 +53,25 @@ export function FleetMap({
   const activeRoute = selectedDriverId && route?.driverId === selectedDriverId ? route : null;
   const routeStops = activeRoute?.stops ?? [];
   const routeIds = new Set(routeStops.map((stop) => stop.deliveryId));
+  // Stores with a load still waiting to be collected by one of the shown deliveries.
+  const stores = new Map<string, { name: string; location: LatLng; count: number }>();
   const pins = deliveries.filter((delivery) => {
     if (routeIds.has(delivery.id)) return false;
     if (delivery.status === 'unassigned') return showUnassigned;
     return selectedDriverId ? delivery.driverId === selectedDriverId : true;
   });
+
+  for (const delivery of pins) {
+    const pickup = delivery.pickup;
+    if (!pickup || pickup.collectedAt != null) continue;
+    const entry = stores.get(pickup.storeId) ?? {
+      name: pickup.storeName,
+      location: pickup.location,
+      count: 0,
+    };
+    entry.count += 1;
+    stores.set(pickup.storeId, entry);
+  }
 
   const fitPoints: LatLng[] = selectedDriverId
     ? [
@@ -93,23 +107,43 @@ export function FleetMap({
           <Tooltip>
             <span className="font-semibold">{delivery.orderId}</span> · {STATUS_META[delivery.status].label}
             <br />
+            {delivery.pickup ? `${delivery.pickup.storeName} → ` : ''}
             {delivery.customer.name}
+          </Tooltip>
+        </Marker>
+      ))}
+
+      {[...stores.entries()].map(([storeId, store]) => (
+        <Marker
+          key={`store-${storeId}`}
+          position={toLeaflet(store.location)}
+          icon={storeIcon()}
+          title={store.name}
+        >
+          <Tooltip>
+            <span className="font-semibold">{store.name}</span>
+            <br />
+            {store.count} load{store.count === 1 ? '' : 's'} waiting for pickup
           </Tooltip>
         </Marker>
       ))}
 
       {routeStops.map((stop, index) => (
         <Marker
-          key={stop.deliveryId}
+          key={`${stop.deliveryId}-${stop.kind}`}
           position={toLeaflet(stop.location)}
-          icon={stopIcon({ label: String(index + 1), color: statusHex(stop.status), active: index === 0 })}
+          icon={
+            stop.kind === 'pickup'
+              ? storeIcon({ active: index === 0 })
+              : stopIcon({ label: String(index + 1), color: statusHex(stop.status), active: index === 0 })
+          }
           eventHandlers={{ click: () => navigate(`/deliveries/${stop.deliveryId}`) }}
         >
           <Tooltip>
             <span className="font-semibold">
-              {index + 1}. {stop.orderId}
+              {index + 1}. {stop.kind === 'pickup' ? `Pickup at ${stop.title}` : stop.orderId}
             </span>{' '}
-            · {stop.customerName}
+            · {stop.kind === 'pickup' ? stop.orderId : stop.customerName}
           </Tooltip>
         </Marker>
       ))}

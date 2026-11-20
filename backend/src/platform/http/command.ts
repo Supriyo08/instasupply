@@ -6,6 +6,7 @@ import { CALLABLES, type CallableName } from '@instasupply/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Actor } from '../auth/actor';
+import { requireAuth } from '../auth/policies';
 import type { RequestContext } from './context';
 import { ApiError, notFound } from './errors';
 import { consumeAll, type RateLimitUse } from './rate-limit';
@@ -48,21 +49,27 @@ export function defineCommand<Req, Res>(spec: CommandSpec<Req, Res>): void {
   registry.set(spec.name, { spec: spec as CommandSpec<unknown, unknown>, stubOwner: null });
 }
 
-/** A command whose module is still being written: same policy-free contract, answers internal "not implemented". */
+/**
+ * The placeholder contract: signed-in callers only (deny by default, so an anonymous caller cannot make
+ * 500s at will and a later handler can never inherit a public policy), answering internal "not
+ * implemented". The owner stays in the registry for the tests, not in the client-visible details.
+ */
+export function stubCommandSpec(name: string): CommandSpec<unknown, unknown> {
+  return {
+    name: name as CallableName,
+    policy: requireAuth,
+    schema: z.unknown(),
+    handler: async () => {
+      throw new ApiError('internal', 'not implemented', null, { command: name });
+    },
+  };
+}
+
+/** A command whose module is still being written: answers internal "not implemented" to signed-in callers. */
 export function defineStubCommand(name: CallableName, owner: string): void {
   const existing = registry.get(name);
   if (existing && existing.stubOwner === null) return;
-  registry.set(name, {
-    stubOwner: owner,
-    spec: {
-      name,
-      policy: (ctx) => ctx.actor,
-      schema: z.unknown(),
-      handler: async () => {
-        throw new ApiError('internal', 'not implemented', null, { command: name, owner });
-      },
-    },
-  });
+  registry.set(name, { stubOwner: owner, spec: stubCommandSpec(name) });
 }
 
 export function registeredCommands(): { name: string; stubOwner: string | null }[] {

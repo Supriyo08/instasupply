@@ -1,4 +1,4 @@
-import { formatClock, formatDate, toMillis, type ChatMessage } from '@instasupply/shared';
+import { formatClock, formatDayET, localDateOf, type ChatMessage } from '@instasupply/shared';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 
@@ -7,19 +7,18 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState, ErrorState, PageSpinner } from '@/components/ui/Feedback';
 import { MessagesIcon, PackageIcon, SendIcon } from '@/components/ui/icons';
 import { useToast } from '@/components/ui/Toast';
-import { useSignedInUser } from '@/features/auth/AuthProvider';
 import { cn } from '@/lib/cn';
 import type { DriverRecord } from '@/lib/data';
-import { errorMessage } from '@/lib/firebase/callables';
-import type { WithId } from '@/lib/firebase/hooks';
+import { errorMessage } from '@/lib/api';
+import type { WithId } from '@/lib/data';
 
-import { markThreadRead, sendStaffMessage, useMessages, useThread } from './hooks';
+import { markThreadRead, newMessageId, sendStaffMessage, useMessages, useThread } from './hooks';
 
 function DayDivider({ millis }: { millis: number }) {
   return (
-    <div className="my-3 flex items-center gap-3 text-[11px] font-medium text-slate-400">
+    <div className="my-3 flex items-center gap-3 text-[11px] font-medium text-slate-400" role="separator">
       <span className="h-px flex-1 bg-slate-200" />
-      {formatDate(millis)}
+      {formatDayET(millis, Date.now())}
       <span className="h-px flex-1 bg-slate-200" />
     </div>
   );
@@ -47,7 +46,7 @@ function Bubble({ message, mine }: { message: WithId<ChatMessage>; mine: boolean
           )}
         >
           {message.senderRole === 'staff' && mine ? `${message.senderName} · ` : ''}
-          {formatClock(message.createdAt ?? Date.now())}
+          <time dateTime={new Date(message.createdAt).toISOString()}>{formatClock(message.createdAt)}</time>
           {message.deliveryId ? (
             <Link
               to={`/deliveries/${message.deliveryId}`}
@@ -66,12 +65,14 @@ function Bubble({ message, mine }: { message: WithId<ChatMessage>; mine: boolean
 }
 
 export function Conversation({ driver }: { driver: DriverRecord }) {
-  const { user, displayName } = useSignedInUser();
   const toast = useToast();
   const thread = useThread(driver.id);
   const messages = useMessages(driver.id);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  // One id per message written: a retry after a lost answer sends the same id, so it is stored once.
+  const messageId = useRef(newMessageId());
   const endRef = useRef<HTMLDivElement>(null);
 
   // Reset our unread counter whenever new driver messages arrive while the thread is open.
@@ -85,13 +86,16 @@ export function Conversation({ driver }: { driver: DriverRecord }) {
   }, [messages.data.length]);
 
   const send = async () => {
-    if (!text.trim()) return;
+    if (!text.trim() || sending) return;
     setSending(true);
+    setFailed(null);
     try {
-      await sendStaffMessage({ driverId: driver.id, text, senderId: user.uid, senderName: displayName });
+      await sendStaffMessage({ id: messageId.current, driverId: driver.id, text });
       setText('');
+      messageId.current = newMessageId();
     } catch (error) {
-      toast.error('Message not sent', errorMessage(error));
+      setFailed(errorMessage(error));
+      toast.error('Message not sent', 'Press Send again: it is sent only once.');
     } finally {
       setSending(false);
     }
@@ -104,7 +108,7 @@ export function Conversation({ driver }: { driver: DriverRecord }) {
     }
   };
 
-  let lastDay: number | null = null;
+  let lastDay: string | null = null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -121,21 +125,26 @@ export function Conversation({ driver }: { driver: DriverRecord }) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto bg-slate-50 px-5 py-4">
-        {messages.error ? (
-          <ErrorState error={messages.error} />
+      <div
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto bg-slate-50 px-5 py-4"
+        role="log"
+        aria-live="polite"
+        aria-label={`Messages with ${driver.displayName}`}
+      >
+        {messages.error && messages.data.length === 0 ? (
+          <ErrorState error={messages.error} onRetry={messages.retry} />
         ) : messages.loading && messages.data.length === 0 ? (
           <PageSpinner label="Loading messages" />
         ) : messages.data.length === 0 ? (
           <EmptyState
             icon={MessagesIcon}
             title={`Start a conversation with ${driver.displayName.split(' ')[0]}`}
-            description="They'll get a push notification on their phone."
+            description="They get a notification on their phone in the InstaSupply Driver app."
           />
         ) : (
           messages.data.map((message) => {
-            const millis = toMillis(message.createdAt) ?? Date.now();
-            const day = new Date(millis).setHours(0, 0, 0, 0);
+            const millis = message.createdAt;
+            const day = localDateOf(millis);
             const divider = day !== lastDay ? <DayDivider millis={millis} /> : null;
             lastDay = day;
             return (
@@ -149,6 +158,11 @@ export function Conversation({ driver }: { driver: DriverRecord }) {
         <div ref={endRef} />
       </div>
 
+      {failed ? (
+        <p className="border-t border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700" role="alert">
+          Not sent: {failed}
+        </p>
+      ) : null}
       <form
         className="flex items-end gap-2 border-t border-slate-200 bg-white p-3"
         onSubmit={(event) => {
@@ -159,7 +173,14 @@ export function Conversation({ driver }: { driver: DriverRecord }) {
         <textarea
           aria-label={`Message ${driver.displayName}`}
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setText(event.target.value);
+            if (failed) {
+              // Different text is a new message; the same text sent again keeps its id.
+              setFailed(null);
+              messageId.current = newMessageId();
+            }
+          }}
           onKeyDown={onKeyDown}
           rows={1}
           maxLength={1000}

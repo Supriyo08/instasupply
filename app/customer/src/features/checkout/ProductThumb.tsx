@@ -2,18 +2,20 @@ import type { Product } from '@instasupply/shared';
 import { StyleSheet, View } from 'react-native';
 
 import { ArtImage, Text } from '@/components/ui';
-import { colors, productBackdrops } from '@/theme/tokens';
+import { useCategory } from '@/features/catalog/hooks';
+import { colors, fallbackTint } from '@/theme/tokens';
 
-/** Product illustration on its category's pastel circle, with an optional "×2" bubble. */
+/** Product art on its category's pastel circle (the category icon when it has none), with "×2". */
 export function ProductThumb({
   product,
-  size = 64,
+  size = 56,
   quantity,
 }: {
-  product: Pick<Product, 'categoryId' | 'imageKey' | 'imageUrl'>;
+  product: Pick<Product, 'categoryId' | 'imageKey' | 'imageUrl'> | null;
   size?: number;
   quantity?: number;
 }) {
+  const category = useCategory(product?.categoryId).data;
   return (
     <View style={{ width: size, height: size }}>
       <View
@@ -23,11 +25,15 @@ export function ProductThumb({
             width: size,
             height: size,
             borderRadius: size / 2,
-            backgroundColor: productBackdrops[product.categoryId] ?? colors.primaryTint,
+            backgroundColor: category?.tint ?? fallbackTint,
           },
         ]}
       >
-        <ArtImage artKey={product.imageKey} uri={product.imageUrl} size={Math.round(size * 0.86)} />
+        <ArtImage
+          artKey={product?.imageKey ?? category?.iconKey ?? null}
+          uri={product?.imageUrl ?? null}
+          size={Math.round(size * 0.8)}
+        />
       </View>
       {quantity && quantity > 1 ? (
         <View style={styles.bubble}>
@@ -53,5 +59,5 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: -4,
   },
-  circle: { alignItems: 'center', justifyContent: 'center' },
+  circle: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
 });

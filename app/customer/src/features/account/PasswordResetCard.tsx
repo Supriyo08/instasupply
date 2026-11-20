@@ -1,32 +1,38 @@
-import { describeError } from '@instasupply/expo-firebase';
+import { describeError } from '@instasupply/api-client';
+import { isStrongPassword } from '@instasupply/shared';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Button, Icon, Text } from '@/components/ui';
-import { resetPassword } from '@/features/session/auth-service';
-import { confirmAction, notify } from '@/lib/notify';
-import { colors, radius } from '@/theme/tokens';
+import { Button, Icon, Input, Notice, Text } from '@/components/ui';
+import { changePassword } from '@/features/session/auth-service';
+import { colors, radius, spacing } from '@/theme/tokens';
 
-/** "Change password" block: confirm, then email a reset link to the account address. */
-export function PasswordResetCard({ email }: { email: string | null }) {
-  const [sending, setSending] = useState(false);
+/** "Change password": the current and a new password (`api.session.changePassword`). */
+export function PasswordResetCard() {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const strength = next ? isStrongPassword(next) : { ok: false };
 
-  const send = async () => {
-    if (!email) return;
-    const confirmed = await confirmAction(
-      'Change your password?',
-      `We'll email a secure link to ${email}. Open it to choose a new password.`,
-      'Send link',
-    );
-    if (!confirmed) return;
-    setSending(true);
+  const save = async () => {
+    setError(null);
+    setDone(false);
+    if (!strength.ok) {
+      setError(strength.message ?? 'Choose a stronger password.');
+      return;
+    }
+    setBusy(true);
     try {
-      await resetPassword(email);
-      notify('Check your inbox', `We sent a password reset link to ${email}.`);
-    } catch (error) {
-      notify("Couldn't send the link", describeError(error));
+      await changePassword({ currentPassword: current, newPassword: next });
+      setCurrent('');
+      setNext('');
+      setDone(true);
+    } catch (caught) {
+      setError(describeError(caught));
     } finally {
-      setSending(false);
+      setBusy(false);
     }
   };
 
@@ -37,37 +43,55 @@ export function PasswordResetCard({ email }: { email: string | null }) {
           <Icon name="key" size={20} color={colors.primary} />
         </View>
         <View style={styles.text}>
-          <Text variant="bodyMedium">Reset by email</Text>
+          <Text variant="bodyMedium">Change password</Text>
           <Text variant="caption" color="muted">
-            {email
-              ? `We'll send a secure link to ${email} so you can choose a new password.`
-              : 'Your account has no email address, so the password cannot be reset here.'}
+            Use at least 8 characters with letters and a number.
           </Text>
         </View>
       </View>
+      <Input
+        tone="muted"
+        icon="lock"
+        placeholder="Current password"
+        secureTextEntry
+        autoComplete="current-password"
+        value={current}
+        onChangeText={setCurrent}
+      />
+      <Input
+        tone="muted"
+        icon="lock"
+        placeholder="New password"
+        secureTextEntry
+        autoComplete="new-password"
+        value={next}
+        onChangeText={setNext}
+      />
+      {error ? <Notice tone="danger" message={error} /> : null}
+      {done ? <Notice tone="success" message="Password changed." /> : null}
       <Button
         variant="secondary"
         size="md"
-        icon="send"
-        label="Send reset link"
-        loading={sending}
-        disabled={!email}
-        onPress={() => void send()}
+        icon="check"
+        label="Change password"
+        loading={busy}
+        disabled={!current || !next}
+        onPress={() => void save()}
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: colors.surface, borderRadius: radius.md, gap: 14, padding: 16 },
+  card: { backgroundColor: colors.surface, borderRadius: radius.md, gap: spacing.md, padding: spacing.lg },
   icon: {
     alignItems: 'center',
     backgroundColor: colors.primarySoft,
-    borderRadius: 21,
-    height: 42,
+    borderRadius: radius.pill,
+    height: 40,
     justifyContent: 'center',
-    width: 42,
+    width: 40,
   },
-  row: { alignItems: 'center', flexDirection: 'row', gap: 14 },
+  row: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   text: { flex: 1, gap: 2 },
 });

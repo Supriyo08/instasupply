@@ -1,60 +1,94 @@
-import * as Haptics from 'expo-haptics';
+import { formatMoney } from '@instasupply/shared';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
-import { Button, Header, Screen, Text } from '@/components/ui';
-import { goShopping, singleParam } from '@/features/checkout/navigation';
-import { OrderReceipt } from '@/features/checkout/OrderReceipt';
+import { Button, Card, ErrorState, Screen, Skeleton, Text } from '@/components/ui';
+import { singleParam } from '@/features/checkout/navigation';
+import { GetUpdatesCard, paymentLine, StorePromiseRows } from '@/features/checkout/OrderPlaced';
 import { SuccessHero } from '@/features/checkout/SuccessHero';
 import { useOrder } from '@/features/orders/hooks';
+import { RequireAccount } from '@/features/session/RequireAccount';
+import { useNow } from '@/hooks/useNow';
+import { spacing } from '@/theme/tokens';
 
-export default function OrderSuccessScreen() {
-  const params = useLocalSearchParams<{ orderId?: string | string[]; number?: string | string[] }>();
-  const orderId = singleParam(params.orderId);
-  const number = singleParam(params.number) ?? null;
-  const { data: order, loading } = useOrder(orderId);
+function OrderPlaced() {
+  const params = useLocalSearchParams<{ orderId?: string; number?: string; total?: string }>();
+  const orderId = singleParam(params.orderId) ?? null;
+  const order = useOrder(orderId);
+  const now = useNow(30_000);
+  const number = order.data?.number ?? singleParam(params.number) ?? 'Your order';
+  const total = Number(singleParam(params.total));
 
-  useEffect(() => {
-    if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, []);
-
-  const trackOrder = () => {
+  const track = () => {
     if (orderId) router.replace({ pathname: '/orders/[id]', params: { id: orderId } });
     else router.replace('/orders');
   };
 
   return (
     <Screen
-      header={<Header title="Order Success" onBack={goShopping} />}
-      contentStyle={styles.content}
+      safeTop
       footer={
-        <View style={styles.actions}>
-          <Button label="Track order" icon="map-pin" onPress={trackOrder} />
-          <Button label="Continue shopping" variant="secondary" onPress={goShopping} />
-        </View>
+        <>
+          <Button label="Track order" icon="map" onPress={track} />
+          <Button label="Keep shopping" variant="secondary" onPress={() => router.dismissTo('/')} />
+        </>
       }
     >
-      <View style={styles.body}>
-        <SuccessHero />
-        <View style={styles.copy}>
-          <Text variant="title" align="center" accessibilityRole="header">
-            Your order was successful!
-          </Text>
-          <Text color="muted" align="center" style={styles.message}>
-            You will get a response within a few minutes.
-          </Text>
-        </View>
-        <OrderReceipt number={number} order={order} loading={loading} />
+      <SuccessHero />
+      <View style={styles.heading}>
+        <Text variant="title" align="center" accessibilityRole="header">
+          Order {number} placed
+        </Text>
+        <Text color="muted" align="center">
+          Each store is confirming its part now. We’ll keep you posted at every step.
+        </Text>
       </View>
+
+      <Card style={styles.card}>
+        {order.loading && !order.data ? (
+          <View accessible accessibilityLabel="Loading your order" style={styles.skeletons}>
+            <Skeleton style={styles.skeleton} />
+            <Skeleton style={styles.skeleton} />
+          </View>
+        ) : order.error && !order.data ? (
+          <ErrorState title="Couldn't load the order details" error={order.error} onRetry={order.retry} />
+        ) : order.data ? (
+          <>
+            <StorePromiseRows order={order.data} now={now} />
+            <View style={styles.payment}>
+              <Text variant="bodyMedium">{paymentLine(order.data)}</Text>
+              <Text variant="caption" color="muted">
+                Charged when your order is complete, for what was supplied.
+              </Text>
+            </View>
+          </>
+        ) : (
+          <Text color="muted">
+            {Number.isFinite(total)
+              ? `Card held · ${formatMoney(total)}`
+              : 'Your order details are in Orders.'}
+          </Text>
+        )}
+      </Card>
+
+      <GetUpdatesCard />
     </Screen>
   );
 }
 
+/** "Order IS-10042 placed", one row per store with its promise, "Card held · $388.25", Track order. */
+export default function OrderSuccessScreen() {
+  return (
+    <RequireAccount title="Order placed">
+      <OrderPlaced />
+    </RequireAccount>
+  );
+}
+
 const styles = StyleSheet.create({
-  actions: { gap: 10 },
-  body: { alignItems: 'center', flex: 1, gap: 24, justifyContent: 'center', paddingVertical: 12 },
-  content: { flexGrow: 1 },
-  copy: { alignItems: 'center', gap: 6 },
-  message: { maxWidth: 260 },
+  card: { gap: spacing.lg },
+  heading: { gap: spacing.sm },
+  payment: { gap: 2 },
+  skeleton: { borderRadius: 8, height: 40 },
+  skeletons: { gap: spacing.md },
 });

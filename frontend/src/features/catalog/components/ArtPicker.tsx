@@ -4,7 +4,7 @@ import { TextInput } from '@/components/ui/Form';
 import { NoImageIcon, SearchIcon } from '@/components/ui/icons';
 
 import { artLabel, artSrc } from '../art';
-import { normalizeHex } from '../category-form';
+import { normalizeHex } from '../colors';
 
 /** Show the search box once there are more options than fit in two rows. */
 const SEARCH_FROM = 12;

@@ -22,8 +22,25 @@ export const REDACT_PATHS = [
   '*.accessToken',
 ];
 
+/**
+ * pino-pretty is a devDependency, so the production image (npm ci --omit=dev) does not have it. An image
+ * started with NODE_ENV=development (or LOG_PRETTY=true) would otherwise crash when pino cannot load the
+ * transport; it falls back to JSON lines instead.
+ */
+export function prettyAvailable(resolve: (specifier: string) => string = import.meta.resolve): boolean {
+  try {
+    resolve('pino-pretty');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** pino options with the shape Railway's log explorer reads: a string `level` and the text in `message`. */
-export function loggerOptions(config: Config): LoggerOptions {
+export function loggerOptions(
+  config: Config,
+  pretty = config.LOG_PRETTY && prettyAvailable(),
+): LoggerOptions {
   return {
     level: config.LOG_LEVEL,
     messageKey: 'message',
@@ -38,7 +55,7 @@ export function loggerOptions(config: Config): LoggerOptions {
       }),
       res: (res: { statusCode?: number }) => ({ statusCode: res.statusCode }),
     },
-    ...(config.LOG_PRETTY
+    ...(pretty
       ? { transport: { target: 'pino-pretty', options: { messageKey: 'message', colorize: true } } }
       : {}),
   };

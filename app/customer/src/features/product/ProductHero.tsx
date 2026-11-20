@@ -1,47 +1,44 @@
 import type { Product } from '@instasupply/shared';
 import { StyleSheet, View } from 'react-native';
 
-import { ArtImage, Text } from '@/components/ui';
+import { Text } from '@/components/ui';
+import { useCategoryTint } from '@/features/catalog/hooks';
 import { colors, radius, spacing } from '@/theme/tokens';
 
-import { backdropFor, isAvailable } from './constants';
 import { HeroBackdrop } from './HeroBackdrop';
+import { ProductArt } from './ProductArt';
 
-/** Top of the product page: the pastel blob backdrop with the product art drawn large. */
+/** Top of the product page: the category pastel backdrop with the art large on its circle. */
 export function ProductHero({
   product,
   height,
   artSize,
+  soldOut,
 }: {
   product: Product;
   height: number;
   artSize: number;
+  soldOut: boolean;
 }) {
-  const available = isAvailable(product);
+  const tint = useCategoryTint(product.categoryId);
   return (
     <View style={[styles.hero, { height }]}>
-      <HeroBackdrop tint={backdropFor(product.categoryId)} />
-      <View
-        accessible
-        accessibilityRole="image"
-        accessibilityLabel={product.name}
-        style={available ? null : styles.dimmed}
-      >
-        <ArtImage artKey={product.imageKey} uri={product.imageUrl} size={artSize} />
+      <HeroBackdrop tint={tint} />
+      <View accessible accessibilityRole="image" accessibilityLabel={product.name}>
+        <ProductArt product={product} size={artSize} dimmed={soldOut} />
       </View>
-      {available ? null : (
+      {soldOut ? (
         <View style={styles.soldOut}>
           <Text variant="captionMedium" color="white">
             Out of stock
           </Text>
         </View>
-      )}
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  dimmed: { opacity: 0.5 },
   hero: {
     alignItems: 'center',
     backgroundColor: colors.surface,

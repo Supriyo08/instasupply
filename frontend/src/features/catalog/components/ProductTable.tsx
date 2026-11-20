@@ -1,105 +1,176 @@
+import type { QueryKey } from '@instasupply/api-client';
+import { CATEGORIES, availableQty, type Product } from '@instasupply/shared';
+
+import { Badge } from '@/components/ui/Badge';
+import { IconButton } from '@/components/ui/Button';
+import { DeleteIcon, EditIcon, SparklesIcon } from '@/components/ui/icons';
 import { cn } from '@/lib/cn';
 
-import type { CategoryRecord, ProductRecord } from '../hooks';
+import { isLowStock } from '../catalog-model';
 import { ArtThumb } from './ArtThumb';
-import { FlagSwitch } from './FlagSwitch';
-import { CategoryName, PriceTag, ProductActions, ProductBadge, RatingTag } from './ProductParts';
-import { StockEditor } from './StockEditor';
+import { ActiveSwitch, PriceCell, StockCell } from './InlineCells';
 
-export interface ProductRowsProps {
-  products: ProductRecord[];
-  categoryById: Map<string, CategoryRecord>;
+/**
+ * The catalogue table (MARKETPLACE §8): SKU, name, brand, category, unit/size, price, on hand,
+ * reserved, available, active, with inline price and on-hand edits and the active switch. Staff see
+ * the store and the staff-only flags. Rows come in the frozen order of `useFrozenRows`.
+ */
+export function ProductTable({
+  products,
+  listKey,
+  showStore,
+  staff,
+  canDelete,
+  onEdit,
+  onDelete,
+}: {
+  products: readonly Product[];
+  listKey: QueryKey | null;
+  showStore: boolean;
+  staff: boolean;
   canDelete: boolean;
-  onEdit: (product: ProductRecord) => void;
-  onDelete: (product: ProductRecord) => void;
-}
-
-/** Dense product table for tablet and desktop widths. */
-export function ProductTable({ products, categoryById, canDelete, onEdit, onDelete }: ProductRowsProps) {
+  onEdit: (product: Product) => void;
+  onDelete: (product: Product) => void;
+}) {
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
-        <thead className="border-b border-slate-200 bg-slate-50/70 text-xs font-medium text-slate-500">
+      <table className="w-full min-w-[68rem] text-left text-sm">
+        <caption className="sr-only">Products, with inline price and stock editing</caption>
+        <thead className="bg-slate-50 text-xs text-slate-500">
           <tr>
-            <th scope="col" className="px-5 py-3 font-medium">
+            <th scope="col" className="px-4 py-2.5 font-medium">
               Product
             </th>
-            <th scope="col" className="hidden px-3 py-3 font-medium xl:table-cell">
+            <th scope="col" className="px-3 py-2.5 font-medium">
+              SKU
+            </th>
+            {showStore ? (
+              <th scope="col" className="px-3 py-2.5 font-medium">
+                Store
+              </th>
+            ) : null}
+            <th scope="col" className="px-3 py-2.5 font-medium">
               Category
             </th>
-            <th scope="col" className="px-3 py-3 text-right font-medium">
+            <th scope="col" className="px-3 py-2.5 font-medium">
+              Unit / size
+            </th>
+            <th scope="col" className="px-3 py-2.5 text-right font-medium">
               Price
             </th>
-            <th scope="col" className="px-3 py-3 font-medium">
-              Stock
+            <th scope="col" className="px-3 py-2.5 text-right font-medium">
+              On hand
             </th>
-            <th scope="col" className="hidden px-3 py-3 font-medium xl:table-cell">
-              Rating
+            <th scope="col" className="px-3 py-2.5 text-right font-medium">
+              Reserved
             </th>
-            <th scope="col" className="px-3 py-3 text-center font-medium">
-              Active
+            <th scope="col" className="px-3 py-2.5 text-right font-medium">
+              Available
             </th>
-            <th scope="col" className="px-3 py-3 text-center font-medium">
-              Featured
+            <th scope="col" className="px-3 py-2.5 font-medium">
+              For sale
             </th>
-            <th scope="col" className="px-5 py-3 text-right font-medium">
+            <th scope="col" className="px-3 py-2.5">
               <span className="sr-only">Actions</span>
             </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
           {products.map((product) => {
-            const category = categoryById.get(product.categoryId);
+            const category = CATEGORIES[product.categoryId];
+            const available = availableQty(product);
+            const low = isLowStock(product);
+            const deletable = canDelete && product.reserved === 0;
             return (
-              <tr key={product.id} className="transition-colors hover:bg-slate-50">
-                <td className="px-5 py-3">
+              <tr key={product.id} className={cn(!product.active && 'bg-slate-50/70')}>
+                <td className="px-4 py-2.5">
                   <div className="flex items-center gap-3">
-                    <ArtThumb artKey={product.imageKey} imageUrl={product.imageUrl} tint={category?.tint} />
-                    <div className="max-w-40 min-w-0 xl:max-w-60">
-                      <p
-                        title={product.name}
-                        className={cn(
-                          'truncate font-medium',
-                          product.active ? 'text-slate-900' : 'text-slate-500',
-                        )}
-                      >
+                    <ArtThumb
+                      artKey={product.imageKey ?? category?.iconKey ?? null}
+                      imageUrl={product.imageUrl}
+                      tint={category?.tint}
+                    />
+                    <div className="min-w-0">
+                      <p className={cn('font-medium', product.active ? 'text-slate-900' : 'text-slate-500')}>
                         {product.name}
                       </p>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500">
-                        <span className="whitespace-nowrap">{product.unit}</span>
-                        <span className="whitespace-nowrap xl:hidden">
-                          · <CategoryName category={category} categoryId={product.categoryId} />
-                        </span>
-                        <ProductBadge badge={product.badge} />
-                      </div>
+                      <p className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                        {product.brand ?? 'No brand'}
+                        {product.shipEstimated ? <Badge tone="warning">Estimated size</Badge> : null}
+                        {staff && product.featured ? (
+                          <Badge tone="brand">
+                            <SparklesIcon size={11} aria-hidden /> Featured
+                          </Badge>
+                        ) : null}
+                        {staff && product.badge ? <Badge tone="info">{product.badge}</Badge> : null}
+                        {staff && product.familyKey ? (
+                          <span className="font-mono text-[11px]">{product.familyKey}</span>
+                        ) : null}
+                      </p>
                     </div>
                   </div>
                 </td>
-                <td className="hidden px-3 py-3 whitespace-nowrap text-slate-700 xl:table-cell">
-                  <CategoryName category={category} categoryId={product.categoryId} />
+                <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap text-slate-600">
+                  {product.sku}
                 </td>
-                <td className="px-3 py-3 text-right">
-                  <PriceTag price={product.price} mrp={product.mrp} className="justify-end" />
+                {showStore ? <td className="px-3 py-2.5 text-slate-700">{product.storeName}</td> : null}
+                <td className="px-3 py-2.5 text-slate-700">{category?.name ?? product.categoryId}</td>
+                <td className="px-3 py-2.5 text-slate-700">
+                  <span className="capitalize">{product.unit}</span>
+                  {product.size ? <span className="block text-xs text-slate-500">{product.size}</span> : null}
                 </td>
-                <td className="px-3 py-3">
-                  <StockEditor product={product} />
+                <td className="px-3 py-2.5 text-right">
+                  <PriceCell product={product} />
                 </td>
-                <td className="hidden px-3 py-3 xl:table-cell">
-                  <RatingTag rating={product.rating} count={product.ratingCount} />
+                <td className="px-3 py-2.5 text-right">
+                  <StockCell product={product} listKey={listKey} />
                 </td>
-                <td className="px-3 py-3 text-center">
-                  <FlagSwitch product={product} flag="active" />
+                <td className="px-3 py-2.5 text-right text-slate-600 tabular-nums">
+                  {product.reserved.toLocaleString('en-CA')}
                 </td>
-                <td className="px-3 py-3 text-center">
-                  <FlagSwitch product={product} flag="featured" />
+                <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                  <span
+                    className={cn(
+                      'font-semibold tabular-nums',
+                      available === 0 ? 'text-rose-600' : low ? 'text-amber-700' : 'text-slate-900',
+                    )}
+                  >
+                    {available.toLocaleString('en-CA')}
+                  </span>
+                  {available === 0 ? (
+                    <span className="block text-xs text-rose-600">Sold out</span>
+                  ) : low ? (
+                    <span className="block text-xs text-amber-700">Low</span>
+                  ) : null}
                 </td>
-                <td className="px-5 py-3">
-                  <ProductActions
-                    product={product}
-                    canDelete={canDelete}
-                    onEdit={onEdit}
-                    onDelete={onDelete}
-                  />
+                <td className="px-3 py-2.5">
+                  <ActiveSwitch product={product} listKey={listKey} />
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="flex justify-end gap-0.5">
+                    <IconButton
+                      icon={EditIcon}
+                      size="sm"
+                      label={`Edit ${product.name}`}
+                      onClick={() => onEdit(product)}
+                    />
+                    {canDelete ? (
+                      <IconButton
+                        icon={DeleteIcon}
+                        size="sm"
+                        label={
+                          deletable
+                            ? `Delete ${product.name}`
+                            : `${product.name} can't be deleted while ${product.reserved} are held by open orders`
+                        }
+                        aria-disabled={!deletable || undefined}
+                        className="aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+                        onClick={() => {
+                          if (deletable) onDelete(product);
+                        }}
+                      />
+                    ) : null}
+                  </div>
                 </td>
               </tr>
             );

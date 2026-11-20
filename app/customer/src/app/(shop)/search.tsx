@@ -1,59 +1,71 @@
-import { searchKeyFor } from '@instasupply/shared';
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { View } from 'react-native';
+import { Keyboard } from 'react-native';
 
-import { Screen, webColumn } from '@/components/ui';
-import { SEARCH_DEBOUNCE_MS } from '@/features/catalog/components/constants';
-import { PopularCategories } from '@/features/catalog/components/PopularCategories';
-import { RecentSearches } from '@/features/catalog/components/RecentSearches';
-import { SearchResults } from '@/features/catalog/components/SearchResults';
-import { SearchTopBar } from '@/features/catalog/components/SearchTopBar';
-import { useDebouncedValue } from '@/features/catalog/components/useDebouncedValue';
-import { useRecentSearches } from '@/features/catalog/components/useRecentSearches';
-import { useCustomer } from '@/features/session/SessionProvider';
+import { Button, EmptyState, Screen } from '@/components/ui';
+import { ProductListing } from '@/features/catalog/components/ProductListing';
+import { ExampleSearches } from '@/features/search/ExampleSearches';
+import { RecentSearches } from '@/features/search/RecentSearches';
+import { SearchTopBar } from '@/features/search/SearchTopBar';
+import { useDebouncedValue } from '@/features/search/useDebouncedValue';
+import { useRecentSearches } from '@/features/search/useRecentSearches';
+import { useUid } from '@/features/session/SessionProvider';
 
-/** Product search: recent searches and popular categories until the shopper types, then live results. */
+const MIN_QUERY = 2;
+
+/**
+ * One search across nearby stores (MARKETPLACE §7.3): example chips and recent searches while the
+ * field is empty; results grouped by family with the shared filters and sorts. `?q=` deep links work.
+ */
 export default function SearchScreen() {
-  const { user } = useCustomer();
-  const { q } = useLocalSearchParams<{ q?: string | string[] }>();
-  const [text, setText] = useState(() => (typeof q === 'string' ? q.slice(0, 60) : ''));
-  const typed = text.trim();
-  const term = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
-  const recents = useRecentSearches(user.uid);
+  const params = useLocalSearchParams<{ q?: string }>();
+  const uid = useUid();
+  const recent = useRecentSearches(uid ?? 'guest');
+  const [text, setText] = useState(() => (typeof params.q === 'string' ? params.q : ''));
+  const debounced = useDebouncedValue(text.trim(), 300);
+  const query = debounced.length >= MIN_QUERY ? debounced : '';
 
-  const searchAgain = (item: string) => {
-    setText(item);
-    recents.add(item);
+  const choose = (term: string) => {
+    setText(term);
+    recent.add(term);
+    Keyboard.dismiss();
   };
 
   return (
     <Screen
       header={
-        // The bar is the colour of the page, so on the web the whole of it keeps to the content column.
-        <View style={webColumn}>
-          <SearchTopBar value={text} onChangeText={setText} onSubmit={() => recents.add(typed)} />
-        </View>
+        <SearchTopBar
+          value={text}
+          onChangeText={setText}
+          onSubmit={() => {
+            if (text.trim().length >= MIN_QUERY) recent.add(text);
+          }}
+        />
       }
     >
-      {searchKeyFor(typed) === null ? (
-        <>
-          <RecentSearches
-            loaded={recents.loaded}
-            items={recents.items}
-            onSelect={searchAgain}
-            onRemove={recents.remove}
-            onClear={recents.clear}
-          />
-          <PopularCategories />
-        </>
-      ) : (
-        <SearchResults
-          key={searchKeyFor(term) ?? ''}
-          term={term}
-          pending={typed !== term}
-          onRemember={() => recents.add(term)}
+      {query ? (
+        <ProductListing
+          q={query}
+          empty={
+            <EmptyState
+              art="scene-material-list"
+              title={`No results for “${query}”`}
+              message="Can't find it? Send us your list and we'll source it from local suppliers."
+              action={<Button label="Send us your list" onPress={() => router.push('/quotes/new')} />}
+            />
+          }
         />
+      ) : (
+        <>
+          <ExampleSearches onSelect={choose} />
+          <RecentSearches
+            loaded={recent.loaded}
+            items={recent.items}
+            onSelect={choose}
+            onRemove={recent.remove}
+            onClear={recent.clear}
+          />
+        </>
       )}
     </Screen>
   );

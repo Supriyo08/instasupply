@@ -1,29 +1,21 @@
-import { COLLECTIONS, type UserPreferences } from '@instasupply/shared';
-import { updateProfile } from 'firebase/auth';
-import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import type { ProfilePatch } from '@instasupply/api-client';
+import type { UserPreferences } from '@instasupply/shared';
 
-import { auth, db } from '@/lib/firebase';
+import { api } from '@/lib/api';
 
-/**
- * Profile writes allowed by the security rules: only displayName, vehicle, photoURL, preferences
- * and updatedAt may change on users/{uid}.
- */
-export async function updateDisplayName(uid: string, displayName: string) {
-  await updateDoc(doc(db, COLLECTIONS.users, uid), { displayName, updatedAt: serverTimestamp() });
-  // Keep the Auth profile in step (best effort: Firestore is the source of truth).
-  const current = auth.currentUser;
-  if (current?.uid === uid) await updateProfile(current, { displayName }).catch(() => undefined);
+/** Saves the display name; the session snapshot (and every screen) updates from the answer. */
+export async function updateDisplayName(displayName: string) {
+  await api.session.updateProfile({ displayName });
 }
 
-export async function updatePreferences(
-  uid: string,
-  current: UserPreferences | undefined,
-  changes: Partial<UserPreferences>,
-) {
-  await updateDoc(doc(db, COLLECTIONS.users, uid), {
-    preferences: { ...current, ...changes },
-    updatedAt: serverTimestamp(),
-  });
+/** Saves preference changes (order updates, deals, chat); the server merges them into the stored ones. */
+export async function updatePreferences(changes: Partial<UserPreferences>) {
+  await api.session.updateProfile({ preferences: changes });
+}
+
+/** Any other profile field the account screens edit (company, account type, photo path). */
+export async function updateProfile(patch: ProfilePatch) {
+  await api.session.updateProfile(patch);
 }
 
 /** A usable display name (2–80 characters after collapsing whitespace), or null. */

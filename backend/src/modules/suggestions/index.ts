@@ -1,12 +1,13 @@
 /**
- * WAVE-2 PLACEHOLDER written by the platform workstream (docs/PLATFORM.md §15 rule 1). The owner is `money-comms`
- * (§15.2), who replaces the bodies; the exported names and signatures are the frozen ones of §9.1, so other
- * modules compile against them today. Its commands answer internal "not implemented" until the owner registers them with defineCommand.
+ * The suggestions module (docs/PLATFORM.md §2.1, §15.2 `money-comms`): the public `suggestStore` command and
+ * the staff endpoints of §5.3.8.
  */
 import type { FastifyInstance } from 'fastify';
 import type { Deps } from '../../container';
-import { defineStubCommand } from '../../platform/http/command';
+import { registerSuggestionRoutes } from './routes';
+import { registerSuggestStore } from './suggest-store';
 
-export function register(_app: FastifyInstance, _deps: Deps): void {
-  defineStubCommand('suggestStore', 'money-comms');
+export function register(app: FastifyInstance, _deps: Deps): void {
+  registerSuggestStore();
+  registerSuggestionRoutes(app);
 }

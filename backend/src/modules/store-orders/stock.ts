@@ -1,10 +1,11 @@
 /**
- * WAVE-2 PLACEHOLDER written by the platform workstream (docs/PLATFORM.md §15 rule 1). The owner is `store-orders`
- * (§15.2), who replaces the bodies; the exported names and signatures are the frozen ones of §9.1, so other
- * modules compile against them today. Every body throws ApiError('internal', 'not implemented').
+ * Stock helpers of docs/PLATFORM.md §9.1 (MARKETPLACE D3): available = stockOnHand − reserved, never stored.
+ * Checkout reserves; reject, cancel and short shipments release; the hand-over at the store commits; a
+ * return to store restocks. Callers hold the product row locks (lockGraph with `productIds`, rank 10).
  */
+import type { StoreOrderLine } from '@instasupply/shared';
 import type { Tx } from '../../platform/db/tx';
-import { notImplemented } from '../../platform/http/errors';
+import { commitStock, releaseStock, reserveStock, restockStock } from './stock.repository';
 
 /** One product quantity; the owner may extend it. */
 export interface StockLine {
@@ -12,19 +13,52 @@ export interface StockLine {
   quantity: number;
 }
 
-export async function stageStockReserve(_tx: Tx, _lines: readonly StockLine[]): Promise<void> {
-  return notImplemented('stageStockReserve');
+/**
+ * Sums quantities per product, drops zero and negative quantities, and orders by product id, so two
+ * transactions touching the same products update them in the same order.
+ */
+export function mergeStockLines(lines: readonly StockLine[]): StockLine[] {
+  const totals = new Map<string, number>();
+  for (const line of lines) {
+    if (!Number.isSafeInteger(line.quantity) || line.quantity <= 0) continue;
+    totals.set(line.productId, (totals.get(line.productId) ?? 0) + line.quantity);
+  }
+  return [...totals.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([productId, quantity]) => ({ productId, quantity }));
 }
+
+/** The catalog lines of a store order with the quantity it still holds (`fulfilledQty`). */
+export function stockLinesOf(
+  lines: readonly Pick<StoreOrderLine, 'kind' | 'productId' | 'fulfilledQty'>[],
+): StockLine[] {
+  return mergeStockLines(
+    lines.flatMap((line) =>
+      line.kind === 'catalog' && line.productId
+        ? [{ productId: line.productId, quantity: line.fulfilledQty }]
+        : [],
+    ),
+  );
+}
+
+export async function stageStockReserve(tx: Tx, lines: readonly StockLine[]): Promise<void> {
+  for (const line of mergeStockLines(lines)) await reserveStock(tx, line.productId, line.quantity);
+}
+
 export async function stageStockRelease(
-  _tx: Tx,
-  _lines: readonly StockLine[],
-  _opts: { outOfStock: boolean },
+  tx: Tx,
+  lines: readonly StockLine[],
+  opts: { outOfStock: boolean },
 ): Promise<void> {
-  return notImplemented('stageStockRelease');
+  for (const line of mergeStockLines(lines)) {
+    await releaseStock(tx, line.productId, line.quantity, opts.outOfStock);
+  }
 }
-export async function stageStockCommit(_tx: Tx, _lines: readonly StockLine[]): Promise<void> {
-  return notImplemented('stageStockCommit');
+
+export async function stageStockCommit(tx: Tx, lines: readonly StockLine[]): Promise<void> {
+  for (const line of mergeStockLines(lines)) await commitStock(tx, line.productId, line.quantity);
 }
-export async function stageStockReturn(_tx: Tx, _lines: readonly StockLine[]): Promise<void> {
-  return notImplemented('stageStockReturn');
+
+export async function stageStockReturn(tx: Tx, lines: readonly StockLine[]): Promise<void> {
+  for (const line of mergeStockLines(lines)) await restockStock(tx, line.productId, line.quantity);
 }

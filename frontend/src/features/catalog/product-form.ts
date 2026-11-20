@@ -1,244 +1,227 @@
 /**
- * Product form state, validation and ids. Validation mirrors `isValidProduct` in
- * firebase/firestore.rules so a save is never rejected by the rules for bad input.
+ * The product form (MARKETPLACE §8 add/edit modal): every product field as text, converted and checked
+ * with `validateProduct` from shared, the function the server runs. Weight and size start from the
+ * category's shipping defaults with "Estimated" ticked; the SKU is fixed after creation because it is
+ * part of the product id (`{storeId}--{skuSlug}`).
  */
-import { formatCurrency, type Product } from '@instasupply/shared';
+import type { ProductInput, ProductPatch } from '@instasupply/api-client';
+import {
+  CATEGORIES,
+  validateProduct,
+  type CategoryId,
+  type Product,
+  type ProductBadge,
+  type SellUnit,
+} from '@instasupply/shared';
 
-export const NAME_MAX = 80;
-export const UNIT_MAX = 30;
-export const DESCRIPTION_MAX = 2000;
-export const IMAGE_URL_MAX = 2048;
-export const PRICE_MAX = 100_000;
-export const STOCK_MAX = 99_999;
+import { centsToInput, parseDollars } from './catalog-model';
 
-export type ProductBadge = NonNullable<Product['badge']>;
-
-export const BADGE_LABELS: Record<ProductBadge, string> = {
-  new: 'New',
-  bestseller: 'Bestseller',
-  organic: 'Organic',
-};
-
-export const BADGE_OPTIONS: { value: ProductBadge | 'none'; label: string }[] = [
-  { value: 'none', label: 'None' },
-  { value: 'new', label: BADGE_LABELS.new },
-  { value: 'bestseller', label: BADGE_LABELS.bestseller },
-  { value: 'organic', label: BADGE_LABELS.organic },
-];
-
-/** Fields staff edit. Ratings, search terms and timestamps are maintained separately. */
-export interface ProductValues {
-  name: string;
-  categoryId: string;
-  unit: string;
-  price: number;
-  mrp: number | null;
-  stock: number;
-  description: string;
-  badge: Product['badge'];
-  imageKey: string | null;
-  imageUrl: string | null;
-  active: boolean;
-  featured: boolean;
-}
-
-/** Editable form state: numbers stay strings until validation so inputs behave naturally. */
 export interface ProductDraft {
+  sku: string;
   name: string;
-  categoryId: string;
-  unit: string;
-  price: string;
-  mrp: string;
-  stock: string;
+  brand: string;
+  categoryId: CategoryId | '';
+  unit: SellUnit;
+  size: string;
   description: string;
-  badge: ProductBadge | 'none';
-  imageKey: string | null;
-  imageUrl: string;
+  price: string;
+  compareAt: string;
+  stockOnHand: string;
+  maxPerOrder: string;
+  weightKg: string;
+  lengthCm: string;
+  widthCm: string;
+  heightCm: string;
+  shipEstimated: boolean;
   active: boolean;
+  imageKey: string | null;
+  imagePath: string | null;
+  // Staff only.
   featured: boolean;
+  badge: ProductBadge | '';
+  familyKey: string;
 }
 
-export type ProductErrors = Partial<Record<keyof ProductDraft | 'form', string>>;
+export type ProductErrors = Partial<Record<keyof ProductInput | 'form' | 'price' | 'compareAt', string>>;
 
-export function emptyProductDraft(categoryId = ''): ProductDraft {
-  return {
+const num = (value: number | null | undefined) => (value == null ? '' : String(value));
+
+export function emptyDraft(categoryId: CategoryId | ''): ProductDraft {
+  const draft: ProductDraft = {
+    sku: '',
     name: '',
+    brand: '',
     categoryId,
-    unit: '',
-    price: '',
-    mrp: '',
-    stock: '',
+    unit: 'each',
+    size: '',
     description: '',
-    badge: 'none',
-    imageKey: null,
-    imageUrl: '',
+    price: '',
+    compareAt: '',
+    stockOnHand: '0',
+    maxPerOrder: '',
+    weightKg: '',
+    lengthCm: '',
+    widthCm: '',
+    heightCm: '',
+    shipEstimated: true,
     active: true,
+    imageKey: null,
+    imagePath: null,
     featured: false,
+    badge: '',
+    familyKey: '',
   };
+  return categoryId ? withCategoryDefaults(draft, categoryId) : draft;
 }
 
-/** The editable fields of a stored product (tolerant of older documents missing optional fields). */
-export function productToValues(product: Product): ProductValues {
+/** Fills empty weight and size from the category defaults and ticks "Estimated" (MARKETPLACE §1.5). */
+export function withCategoryDefaults(draft: ProductDraft, categoryId: CategoryId): ProductDraft {
+  const category = CATEGORIES[categoryId];
+  if (!category) return draft;
+  const next = { ...draft, categoryId };
+  const sizeEmpty = !draft.lengthCm && !draft.widthCm && !draft.heightCm;
+  if (!draft.weightKg) next.weightKg = String(category.defaultWeightKg);
+  if (sizeEmpty) {
+    next.lengthCm = String(category.defaultDimsCm.l);
+    next.widthCm = String(category.defaultDimsCm.w);
+    next.heightCm = String(category.defaultDimsCm.h);
+  }
+  if (!draft.weightKg || sizeEmpty) next.shipEstimated = true;
+  return next;
+}
+
+export function draftFromProduct(product: Product): ProductDraft {
   return {
+    sku: product.sku,
     name: product.name,
+    brand: product.brand ?? '',
     categoryId: product.categoryId,
     unit: product.unit,
-    price: product.price,
-    mrp: product.mrp ?? null,
-    stock: product.stock,
-    description: product.description ?? '',
-    badge: product.badge ?? null,
-    imageKey: product.imageKey ?? null,
-    imageUrl: product.imageUrl ?? null,
+    size: product.size ?? '',
+    description: product.description,
+    price: centsToInput(product.priceCents),
+    compareAt: centsToInput(product.compareAtCents),
+    stockOnHand: String(product.stockOnHand),
+    maxPerOrder: num(product.maxPerOrder),
+    weightKg: num(product.weightKg),
+    lengthCm: num(product.dimsCm.l),
+    widthCm: num(product.dimsCm.w),
+    heightCm: num(product.dimsCm.h),
+    shipEstimated: product.shipEstimated,
     active: product.active,
+    imageKey: product.imageKey,
+    imagePath: product.imagePath,
     featured: product.featured,
+    badge: product.badge ?? '',
+    familyKey: product.familyKey ?? '',
   };
 }
 
-export function productToDraft(product: Product): ProductDraft {
-  const values = productToValues(product);
-  return {
-    name: values.name,
-    categoryId: values.categoryId,
-    unit: values.unit,
-    price: String(values.price),
-    mrp: values.mrp != null ? String(values.mrp) : '',
-    stock: String(values.stock),
-    description: values.description,
-    badge: values.badge ?? 'none',
-    imageKey: values.imageKey,
-    imageUrl: values.imageUrl ?? '',
-    active: values.active,
-    featured: values.featured,
+const toNumberOrText = (text: string) => {
+  const trimmed = text.trim();
+  if (trimmed === '') return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : trimmed;
+};
+
+type ValidateResult = { ok: true; value: ProductInput } | { ok: false; errors: ProductErrors };
+
+/** Draft → `ProductInput`, checked like the server does. Staff-only fields are sent by staff only. */
+export function validateDraft(draft: ProductDraft, storeId: string, staff: boolean): ValidateResult {
+  const errors: ProductErrors = {};
+  const priceCents = parseDollars(draft.price);
+  if (priceCents === null) errors.price = 'Enter a price such as 12.99.';
+  const compareAtCents = draft.compareAt.trim() ? parseDollars(draft.compareAt) : null;
+  if (draft.compareAt.trim() && compareAtCents === null)
+    errors.compareAt = 'Enter a price such as 14.99, or leave empty.';
+
+  const raw: Record<string, unknown> = {
+    sku: draft.sku.trim(),
+    name: draft.name.trim(),
+    brand: draft.brand.trim() || null,
+    categoryId: draft.categoryId || null,
+    unit: draft.unit,
+    size: draft.size.trim() || null,
+    description: draft.description.trim(),
+    priceCents: priceCents ?? 0,
+    compareAtCents,
+    stockOnHand: toNumberOrText(draft.stockOnHand),
+    maxPerOrder: toNumberOrText(draft.maxPerOrder),
+    weightKg: toNumberOrText(draft.weightKg),
+    dimsCm:
+      draft.lengthCm || draft.widthCm || draft.heightCm
+        ? {
+            l: toNumberOrText(draft.lengthCm),
+            w: toNumberOrText(draft.widthCm),
+            h: toNumberOrText(draft.heightCm),
+          }
+        : null,
+    shipEstimated: draft.shipEstimated,
+    active: draft.active,
+    imageKey: draft.imageKey,
+    imagePath: draft.imagePath,
   };
+  if (staff) {
+    raw.featured = draft.featured;
+    raw.badge = draft.badge || null;
+    raw.familyKey = draft.familyKey.trim() || null;
+  }
+  const result = validateProduct(raw, storeId);
+  if (!result.ok) {
+    const serverErrors = result.errors as ProductErrors;
+    if (serverErrors.priceCents && !errors.price) errors.price = serverErrors.priceCents;
+    if (serverErrors.compareAtCents && !errors.compareAt) errors.compareAt = serverErrors.compareAtCents;
+    return { ok: false, errors: { ...serverErrors, ...errors } };
+  }
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  const value: ProductInput = { ...result.value };
+  if (!staff) {
+    delete value.featured;
+    delete value.badge;
+    delete value.familyKey;
+  }
+  return { ok: true, value };
 }
-
-const collapse = (value: string) => value.trim().replace(/\s+/g, ' ');
-
-/** A number typed by staff, or null when empty or not a number. */
-export function parseNumber(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const number = Number(trimmed);
-  return Number.isFinite(number) ? number : null;
-}
-
-export const roundMoney = (value: number) => Math.round(value * 100) / 100;
 
 /**
- * Whole units between 0 and STOCK_MAX. Rules require an integer, and Firestore stores -0 (and any
- * fraction) as a double, so always round and normalise.
+ * The fields that changed against the product as it was when the form opened: an edit never re-sends
+ * values someone else changed meanwhile. `stockOnHand` is never patched here; counts change through
+ * the stock-adjust endpoint, which is safe against sales at the same moment.
  */
-export function toStock(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(STOCK_MAX, Math.max(0, Math.round(value))) || 0;
+export function patchFrom(next: ProductInput, original: ProductInput): ProductPatch {
+  const patch: Record<string, unknown> = {};
+  for (const key of Object.keys(next) as (keyof ProductInput)[]) {
+    if (key === 'sku' || key === 'stockOnHand') continue;
+    if (JSON.stringify(next[key]) !== JSON.stringify(original[key])) patch[key] = next[key];
+  }
+  return patch as ProductPatch;
 }
 
-export function isHttpsUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-type Result<T, E> = { ok: true; value: T } | { ok: false; errors: E };
-
-export function validateProductDraft(
-  draft: ProductDraft,
-  categoryIds: ReadonlySet<string>,
-): Result<ProductValues, ProductErrors> {
-  const errors: ProductErrors = {};
-
-  const name = collapse(draft.name);
-  if (!name) errors.name = 'Enter the product name.';
-  else if (name.length > NAME_MAX) errors.name = `Keep the name under ${NAME_MAX} characters.`;
-
-  if (!categoryIds.has(draft.categoryId)) errors.categoryId = 'Choose a category.';
-
-  const unit = collapse(draft.unit);
-  if (!unit) errors.unit = 'Enter the pack size, e.g. 1 kg or 6 pcs.';
-  else if (unit.length > UNIT_MAX) errors.unit = `Keep the pack size under ${UNIT_MAX} characters.`;
-
-  const parsedPrice = parseNumber(draft.price);
-  const price = parsedPrice === null ? null : roundMoney(parsedPrice);
-  if (price === null) errors.price = 'Enter the selling price.';
-  else if (price < 0) errors.price = "The price can't be negative.";
-  else if (price > PRICE_MAX) errors.price = `Enter a price up to ${formatCurrency(PRICE_MAX)}.`;
-
-  const parsedMrp = parseNumber(draft.mrp);
-  const mrp = parsedMrp === null ? null : roundMoney(parsedMrp);
-  if (draft.mrp.trim() && mrp === null) errors.mrp = 'Enter a number, or leave it empty.';
-  else if (mrp !== null && price !== null && mrp <= price)
-    errors.mrp = 'The MRP must be higher than the price.';
-  else if (mrp !== null && mrp > PRICE_MAX) errors.mrp = `Enter an MRP up to ${formatCurrency(PRICE_MAX)}.`;
-
-  const stock = parseNumber(draft.stock);
-  if (stock === null) errors.stock = 'Enter how many units are in stock.';
-  else if (!Number.isInteger(stock) || stock < 0) errors.stock = 'Use a whole number, 0 or more.';
-  else if (stock > STOCK_MAX) errors.stock = `Enter at most ${STOCK_MAX.toLocaleString()} units.`;
-
-  const description = draft.description.trim();
-  if (description.length > DESCRIPTION_MAX) {
-    errors.description = `Keep the description under ${DESCRIPTION_MAX.toLocaleString()} characters.`;
-  }
-
-  const imageUrl = draft.imageUrl.trim();
-  if (imageUrl && (imageUrl.length > IMAGE_URL_MAX || !isHttpsUrl(imageUrl))) {
-    errors.imageUrl = 'Use a full https:// link to an image, or leave it empty.';
-  }
-
-  if (Object.keys(errors).length > 0 || price === null || stock === null) return { ok: false, errors };
-  return {
-    ok: true,
-    value: {
-      name,
-      categoryId: draft.categoryId,
-      unit,
-      price,
-      mrp,
-      stock: toStock(stock),
-      description,
-      badge: draft.badge === 'none' ? null : draft.badge,
-      imageKey: draft.imageKey || null,
-      imageUrl: imageUrl || null,
-      active: draft.active,
-      featured: draft.featured,
-    },
+/** The product as the form would send it, for `patchFrom`. */
+export function inputFromProduct(product: Product, staff: boolean): ProductInput {
+  const input: ProductInput = {
+    sku: product.sku,
+    name: product.name,
+    brand: product.brand,
+    categoryId: product.categoryId,
+    unit: product.unit,
+    size: product.size,
+    description: product.description,
+    priceCents: product.priceCents,
+    compareAtCents: product.compareAtCents,
+    stockOnHand: product.stockOnHand,
+    maxPerOrder: product.maxPerOrder,
+    weightKg: product.weightKg,
+    dimsCm: product.dimsCm,
+    shipEstimated: product.shipEstimated,
+    active: product.active,
+    imageKey: product.imageKey,
+    imagePath: product.imagePath,
   };
-}
-
-/** Only the fields that changed, so a save never overwrites stock sold (or toggles flipped) meanwhile. */
-export function productChanges(before: ProductValues, after: ProductValues): Partial<ProductValues> {
-  const keys = Object.keys(after) as (keyof ProductValues)[];
-  return Object.fromEntries(
-    keys.filter((key) => before[key] !== after[key]).map((key) => [key, after[key]]),
-  ) as Partial<ProductValues>;
-}
-
-export function sameTerms(a: readonly string[] | null | undefined, b: readonly string[]): boolean {
-  return !!a && a.length === b.length && a.every((term, index) => term === b[index]);
-}
-
-/** Readable document id: "Red & Yellow Peppers" → "red-and-yellow-peppers". */
-export function slugify(text: string, fallback: string, maxLength = 56): string {
-  const slug = text
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, maxLength)
-    .replace(/-+$/, '');
-  return slug || fallback;
-}
-
-/** `base`, `base-2`, `base-3`… skipping ids already known to be taken. */
-export function* slugCandidates(base: string, taken: ReadonlySet<string>, attempts = 50): Generator<string> {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const candidate = attempt === 1 ? base : `${base}-${attempt}`;
-    if (!taken.has(candidate)) yield candidate;
+  if (staff) {
+    input.featured = product.featured;
+    input.badge = product.badge;
+    input.familyKey = product.familyKey;
   }
+  return input;
 }

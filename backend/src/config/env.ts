@@ -232,10 +232,12 @@ export function loadConfig(env: Env = process.env): Config {
     else if (nodeEnv === 'test' && 'test' in defaults) raw[name] = defaults.test;
     else raw[name] = defaults.development;
   }
-  raw.STORAGE_LOCAL_DIR ??=
-    nodeEnv === 'test'
-      ? path.join(tmpdir(), `instasupply-files-${process.pid}`)
-      : path.join(backendRoot(), '.data', 'files');
+  // An empty value (a copied .env.example line) means "use the default folder".
+  if (!raw.STORAGE_LOCAL_DIR)
+    raw.STORAGE_LOCAL_DIR =
+      nodeEnv === 'test'
+        ? path.join(tmpdir(), `instasupply-files-${process.pid}`)
+        : path.join(backendRoot(), '.data', 'files');
   // Optional values with no default reach zod as null rather than undefined, so "not set" has one spelling.
   for (const name of ['API_URL', 'RAILWAY_PUBLIC_DOMAIN', 'SEED_PASSWORD'] as const) raw[name] ??= '';
 
@@ -275,6 +277,14 @@ function checkProduction(config: z.infer<typeof schema>, refusals: string[], war
     if (value.length < 32) refusals.push(`${name} must be at least 32 characters`);
     if (value === DEV_JWT_SECRET || value === DEV_OTP_PEPPER)
       refusals.push(`${name} is a development default`);
+  }
+  // The previous secret still signs valid tokens during a rotation, so it gets the same refusals.
+  const previous = config.JWT_SECRET_PREVIOUS;
+  if (previous !== null) {
+    if (previous.length < 32) refusals.push('JWT_SECRET_PREVIOUS must be at least 32 characters');
+    if (previous === DEV_JWT_SECRET || previous === DEV_OTP_PEPPER)
+      refusals.push('JWT_SECRET_PREVIOUS is a development default');
+    if (previous === config.JWT_SECRET) refusals.push('JWT_SECRET_PREVIOUS must differ from JWT_SECRET');
   }
   if (config.EXPOSE_DEV_CODES) refusals.push('EXPOSE_DEV_CODES=true is not allowed in production');
   if (config.RATE_LIMITS_DISABLED) refusals.push('RATE_LIMITS_DISABLED=true is not allowed in production');

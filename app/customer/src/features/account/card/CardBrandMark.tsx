@@ -6,11 +6,11 @@ import { colors, fonts } from '@/theme/tokens';
 
 import { CARD_BRAND_LABEL } from './card-format';
 
-const WORDMARK: Partial<Record<CardBrand, string>> = { visa: 'VISA', amex: 'AMEX', rupay: 'RuPay' };
+const WORDMARK: Partial<Record<CardBrand, string>> = { visa: 'VISA', amex: 'AMEX', discover: 'DISCOVER' };
 
 /**
  * Network mark drawn with views (no bitmap logos): overlapping circles for Mastercard, a
- * wordmark for Visa / Amex / RuPay and a card glyph otherwise. `light` is for the green card.
+ * wordmark for Visa / Amex / Discover and a card glyph otherwise. `light` is for the green card.
  */
 export function CardBrandMark({
   brand,

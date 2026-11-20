@@ -1,24 +1,22 @@
-import type { AuthClaims, UserProfile } from '@instasupply/shared';
-import { onIdTokenChanged, signOut, type IdTokenResult, type User } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+/**
+ * The driver app's session (docs/CLIENTS.md §2.3): a pure function of the api-client session core,
+ * the public config and nothing else. Approval, suspension, phone verification and vehicle reviews
+ * arrive on the `user:{uid}` topic, which makes the core refetch `/me`, so the status moves by itself.
+ */
+import type { UserProfile } from '@instasupply/shared';
+import type { PublicConfig, SessionEndReason, SessionSnapshot, SessionUser } from '@instasupply/api-client';
+import { useConfig, useSessionCore } from '@instasupply/api-client/react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react';
 
-import { auth, db } from '@/lib/firebase';
+import { cleanUpLocationAfterSessionEnd } from '@/features/location/session-cleanup';
+import { api, describeError } from '@/lib/api';
 
 export type SessionStatus =
   | 'loading'
   | 'signed_out'
   | 'staff_account'
   | 'shopper_account'
+  | 'supplier_account'
   | 'needs_profile'
   | 'needs_phone'
   | 'pending_approval'
@@ -27,137 +25,87 @@ export type SessionStatus =
 
 export interface Session {
   status: SessionStatus;
-  user: User | null;
+  user: SessionUser | null;
   profile: UserProfile | null;
-  claims: AuthClaims;
-  /** Force-refresh the ID token so new custom claims apply. */
-  refreshClaims: () => Promise<void>;
+  /** Shown over the splash with "Try again" and a sign-out link: the account or the config cannot be loaded. */
+  problem: string | null;
+  retry: () => void;
+  /** Why the last session ended; the sign-in screen explains it (§2.4). Cleared by the next sign-in. */
+  endReason: SessionEndReason | null;
+}
+
+/** Statuses that belong to a driver account (push registration runs for these, code review R59). */
+export const DRIVER_STATUSES: readonly SessionStatus[] = ['needs_phone', 'pending_approval', 'ready'];
+
+/** The table of docs/CLIENTS.md §2.3, in order. */
+export function deriveStatus(core: SessionSnapshot, config: PublicConfig | null): SessionStatus {
+  if (core.status === 'restoring' || !config) return 'loading';
+  const { user, profile } = core;
+  if (!user) return core.endReason === 'suspended' ? 'suspended' : 'signed_out';
+  if (!profile) return 'needs_profile';
+  if (profile.role === 'admin' || profile.role === 'dispatcher') return 'staff_account';
+  if (profile.role === 'customer') return 'shopper_account';
+  if (profile.role === 'supplier') return 'supplier_account';
+  if (profile.status === 'suspended') return 'suspended';
+  if (requiresPhone(config) && !profile.phoneVerified) return 'needs_phone';
+  if (profile.status === 'pending') return 'pending_approval';
+  return 'ready';
+}
+
+/**
+ * With `phoneVerification: 'required'` the phone step is mandatory, except in production with the
+ * outbox SMS driver, where no code can be delivered: then the phone screens behave as with 'off' (§2.2).
+ */
+export function requiresPhone(config: PublicConfig): boolean {
+  if (config.environment === 'production' && config.smsDriver === 'outbox') return false;
+  return config.phoneVerification === 'required';
+}
+
+/** Endings that the sign-in screen explains (§2.4). */
+export function endReasonMessage(reason: SessionEndReason | null): string | null {
+  switch (reason) {
+    case 'expired':
+    case 'revoked':
+    case 'replaced':
+      return 'Your session has ended. Please sign in again.';
+    default:
+      return null;
+  }
 }
 
 const SessionContext = createContext<Session | null>(null);
 
-/** Wait before retrying a token refresh that failed because the phone was offline. */
-const TOKEN_RETRY_MS = 5_000;
-
-function isNetworkError(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 'auth/network-request-failed';
-}
-
-function deriveStatus(
-  user: User | null,
-  authReady: boolean,
-  profile: UserProfile | null,
-  profileReady: boolean,
-  claims: AuthClaims,
-): SessionStatus {
-  if (!authReady) return 'loading';
-  if (!user) return 'signed_out';
-  if (claims.role === 'admin' || claims.role === 'dispatcher') return 'staff_account';
-  if (claims.role === 'customer') return 'shopper_account';
-  if (!profileReady) return 'loading';
-  if (!profile) return 'needs_profile';
-  if (profile.status === 'suspended') return 'suspended';
-  if (!profile.phoneVerified) return 'needs_phone';
-  if (profile.status === 'pending') return 'pending_approval';
-  // Approved, but this token predates approval: wait for the refreshed claims.
-  if (claims.active !== true) return 'loading';
-  return 'ready';
-}
-
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [claims, setClaims] = useState<AuthClaims>({});
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [profileReady, setProfileReady] = useState(false);
-  const refreshing = useRef(false);
+  const core = useSessionCore();
+  const config = useConfig();
 
-  useEffect(() => {
-    let retry: ReturnType<typeof setTimeout> | undefined;
+  const status = deriveStatus(core, config);
+  const configError = config ? null : api.config.error();
+  const problem = core.problem
+    ? describeError(core.problem)
+    : configError
+      ? describeError(configError, "Can't reach the server. Check your connection and try again.")
+      : null;
 
-    const applyUser = async (nextUser: User | null) => {
-      clearTimeout(retry);
-      if (!nextUser) {
-        setUser(null);
-        setClaims({});
-        setAuthReady(true);
-        return;
-      }
-      let token: IdTokenResult;
-      try {
-        token = await nextUser.getIdTokenResult();
-      } catch (error) {
-        if (auth.currentUser?.uid !== nextUser.uid) return; // A newer session has taken over.
-        if (isNetworkError(error)) {
-          // Offline with an expired token: keep the session and try again shortly.
-          retry = setTimeout(() => void applyUser(nextUser), TOKEN_RETRY_MS);
-          return;
-        }
-        // The saved session can't be refreshed: the account was deleted or disabled, or the
-        // emulators restarted without --persist. Sign out so the sign-in screen shows.
-        await signOut(auth);
-        return;
-      }
-      setClaims({
-        role: token.claims.role as AuthClaims['role'],
-        active: token.claims.active === true,
-      });
-      setUser(nextUser);
-      setAuthReady(true);
-    };
-
-    const unsubscribe = onIdTokenChanged(auth, applyUser);
-    return () => {
-      clearTimeout(retry);
-      unsubscribe();
-    };
+  const retry = useCallback(() => {
+    api.session.retry();
+    void api.config.load().catch(() => undefined);
   }, []);
 
-  const uid = user?.uid ?? null;
+  // Whenever there is no signed-in user any more (sign-out, expiry, revocation, suspension), stop the
+  // background location task and forget the online switch, so nothing keeps publishing for an old
+  // account and the next driver on this phone does not go online by themselves (code review R67).
+  const hadUser = useRef<boolean | null>(null);
+  const hasUser = core.status === 'signed_in';
   useEffect(() => {
-    setProfile(null);
-    setProfileReady(false);
-    if (!uid) return;
-    return onSnapshot(
-      doc(db, 'users', uid),
-      (snapshot) => {
-        setProfile(snapshot.exists() ? ({ uid, ...snapshot.data() } as UserProfile) : null);
-        setProfileReady(true);
-      },
-      () => setProfileReady(true),
-    );
-  }, [uid]);
-
-  const refreshClaims = useCallback(async () => {
-    if (!auth.currentUser || refreshing.current) return;
-    refreshing.current = true;
-    try {
-      await auth.currentUser.getIdToken(true);
-    } catch (error) {
-      // Being offline is not fatal; keep the session. Anything else means the session is dead,
-      // so sign out rather than wait for claims that can never arrive.
-      if (!isNetworkError(error)) await signOut(auth);
-    } finally {
-      refreshing.current = false;
-    }
-  }, []);
-
-  // When dispatch approves the driver, pick up the new `active` claim automatically.
-  const profileStatus = profile?.status;
-  useEffect(() => {
-    if (profileStatus === 'active' && claims.active !== true) void refreshClaims();
-    if (profileStatus === 'pending' && !claims.role && user) void refreshClaims();
-  }, [profileStatus, claims.active, claims.role, user, refreshClaims]);
+    if (core.status === 'restoring') return;
+    if (!hasUser && hadUser.current !== false) void cleanUpLocationAfterSessionEnd();
+    hadUser.current = hasUser;
+  }, [core.status, hasUser]);
 
   const value = useMemo<Session>(
-    () => ({
-      status: deriveStatus(user, authReady, profile, profileReady, claims),
-      user,
-      profile,
-      claims,
-      refreshClaims,
-    }),
-    [user, authReady, profile, profileReady, claims, refreshClaims],
+    () => ({ status, user: core.user, profile: core.profile, problem, retry, endReason: core.endReason }),
+    [status, core.user, core.profile, problem, retry, core.endReason],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
@@ -169,8 +117,8 @@ export function useSession(): Session {
   return session;
 }
 
-/** For screens inside the signed-in area, where a profile is guaranteed. */
-export function useDriver(): { user: User; profile: UserProfile } {
+/** For screens inside the signed-in area (`(app)`), where a user and a driver profile are guaranteed. */
+export function useDriver(): { user: SessionUser; profile: UserProfile } {
   const { user, profile } = useSession();
   if (!user || !profile) throw new Error('useDriver called outside the signed-in area.');
   return { user, profile };

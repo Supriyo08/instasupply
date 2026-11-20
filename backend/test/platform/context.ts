@@ -119,17 +119,26 @@ export async function createTestContext(
   const name = newDatabaseName();
   await createDatabase(name);
   const databaseUrl = urlFor(name);
-  const config = loadConfig({ NODE_ENV: 'test', DATABASE_URL: databaseUrl, LOG_LEVEL: 'info', ...options.env });
+  const config = loadConfig({
+    NODE_ENV: 'test',
+    DATABASE_URL: databaseUrl,
+    LOG_LEVEL: 'info',
+    ...options.env,
+  });
   const clock = options.clock ?? new FakeClock();
   const hooks = new TestHooks();
   const logs: Record<string, unknown>[] = [];
   const sink = new Writable({
     write(chunk: Buffer, _encoding, done) {
-      for (const line of chunk.toString('utf8').split('\n')) if (line.trim()) logs.push(JSON.parse(line) as Record<string, unknown>);
+      for (const line of chunk.toString('utf8').split('\n'))
+        if (line.trim()) logs.push(JSON.parse(line) as Record<string, unknown>);
       done();
     },
   });
-  const log = pino({ level: 'info', messageKey: 'message', formatters: { level: (label: string) => ({ level: label }) } }, sink);
+  const log = pino(
+    { level: 'info', messageKey: 'message', formatters: { level: (label: string) => ({ level: label }) } },
+    sink,
+  );
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 6, options: '-c TimeZone=UTC' });
   pool.on('error', () => {});
   if (!process.env.TEST_RUN) await migrate(pool, migrationsDir());
@@ -185,17 +194,30 @@ export async function call<T = Record<string, unknown>>(
     headers: { ...(headers ?? {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
   });
   const text = response.body;
-  return { status: response.statusCode, body: (text ? JSON.parse(text) : null) as T, headers: response.headers };
+  return {
+    status: response.statusCode,
+    body: (text ? JSON.parse(text) : null) as T,
+    headers: response.headers,
+  };
 }
 
-export const post = <T = Record<string, unknown>>(ctx: TestContext, url: string, payload: unknown, token?: string | null) =>
+export const post = <T = Record<string, unknown>>(
+  ctx: TestContext,
+  url: string,
+  payload: unknown,
+  token?: string | null,
+) =>
   call<T>(ctx, { method: 'POST', url: `/api/v1${url}`, payload: payload as Record<string, unknown>, token });
 
 export const get = <T = Record<string, unknown>>(ctx: TestContext, url: string, token?: string | null) =>
   call<T>(ctx, { method: 'GET', url: `/api/v1${url}`, token });
 
-export const command = <T = Record<string, unknown>>(ctx: TestContext, name: string, body: unknown, token?: string | null) =>
-  post<T>(ctx, `/call/${name}`, body ?? {}, token);
+export const command = <T = Record<string, unknown>>(
+  ctx: TestContext,
+  name: string,
+  body: unknown,
+  token?: string | null,
+) => post<T>(ctx, `/call/${name}`, body ?? {}, token);
 
 export interface ErrorBody {
   error: { status: string; code: string | null; message: string; details: Record<string, unknown> };
@@ -214,7 +236,13 @@ export const PASSWORD = 'Builder2026';
 
 export async function registerAccount(
   ctx: TestContext,
-  input: { email: string; password?: string; displayName?: string; installationId?: string; app?: 'customer' | 'driver' },
+  input: {
+    email: string;
+    password?: string;
+    displayName?: string;
+    installationId?: string;
+    app?: 'customer' | 'driver';
+  },
 ): Promise<SessionBody> {
   const answer = await post<SessionBody>(ctx, '/auth/register', {
     email: input.email,
@@ -223,13 +251,19 @@ export async function registerAccount(
     installationId: input.installationId ?? `install-${randomBytes(4).toString('hex')}`,
     app: input.app ?? 'customer',
   });
-  if (answer.status !== 200) throw new Error(`register failed: ${answer.status} ${JSON.stringify(answer.body)}`);
+  if (answer.status !== 200)
+    throw new Error(`register failed: ${answer.status} ${JSON.stringify(answer.body)}`);
   return answer.body;
 }
 
 export async function loginAccount(
   ctx: TestContext,
-  input: { email: string; password?: string; installationId?: string; app?: 'customer' | 'driver' | 'console' },
+  input: {
+    email: string;
+    password?: string;
+    installationId?: string;
+    app?: 'customer' | 'driver' | 'console';
+  },
 ): Promise<Answer<SessionBody>> {
   return post<SessionBody>(ctx, '/auth/login', {
     email: input.email,
@@ -244,7 +278,11 @@ export async function setRole(
   ctx: TestContext,
   uid: string,
   role: 'admin' | 'dispatcher' | 'customer' | 'driver' | 'supplier',
-  extra: { storeId?: string; storeRole?: 'owner' | 'staff'; status?: 'active' | 'pending' | 'suspended' } = {},
+  extra: {
+    storeId?: string;
+    storeRole?: 'owner' | 'staff';
+    status?: 'active' | 'pending' | 'suspended';
+  } = {},
 ): Promise<void> {
   await ctx.pool.query(
     `UPDATE users SET role = $2, status = $3, store_id = $4, store_role = $5 WHERE id = $1`,
@@ -281,7 +319,12 @@ export async function insertStore(ctx: TestContext, id: string): Promise<void> {
 }
 
 export async function outboxRows(ctx: TestContext, event?: string) {
-  const { rows } = await ctx.pool.query<{ id: number; event: string; payload: Record<string, unknown>; status: string }>(
+  const { rows } = await ctx.pool.query<{
+    id: number;
+    event: string;
+    payload: Record<string, unknown>;
+    status: string;
+  }>(
     `SELECT id, event, payload, status FROM outbox ${event ? 'WHERE event = $1' : ''} ORDER BY id`,
     event ? [event] : [],
   );

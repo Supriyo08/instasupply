@@ -13,6 +13,20 @@ export function isAllowedOrigin(origin: string, config: CorsConfig): boolean {
   return config.NODE_ENV !== 'production' && LOCAL.test(origin);
 }
 
+/** A browser preflight (OPTIONS with Access-Control-Request-Method) from an origin that is not allowed. */
+export function isRefusedPreflight(
+  method: string,
+  headers: { origin?: string | undefined; 'access-control-request-method'?: string | string[] | undefined },
+  config: CorsConfig,
+): boolean {
+  return (
+    method === 'OPTIONS' &&
+    headers['access-control-request-method'] !== undefined &&
+    typeof headers.origin === 'string' &&
+    !isAllowedOrigin(headers.origin, config)
+  );
+}
+
 export function corsOptions(config: CorsConfig): FastifyCorsOptions {
   return {
     origin: (origin, callback) => callback(null, origin === undefined || isAllowedOrigin(origin, config)),

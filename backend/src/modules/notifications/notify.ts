@@ -1,10 +1,10 @@
 /**
- * The in-app inbox writers (docs/PLATFORM.md §9.1, §10.2).
- *
- * OWNERSHIP NOTE: this folder belongs to the `money-comms` workstream (§15.2). The platform workstream wrote
- * these five functions for real instead of as throwing stubs, because platform and auth flows depend on them
- * (admin alerts for dead outbox events, login failures, reset lockouts, the global OTP cap). money-comms owns
- * the file from here on and may change the body; the signatures are frozen.
+ * The in-app inbox writers (docs/PLATFORM.md §9.1, §10.2), owned by `money-comms` (§15.2); the signatures are
+ * frozen. `notify` inserts the row with statement (g) of §3.5 in the caller's transaction: a second insert with
+ * the same `key` for the same user does nothing, so a retried command or job cannot notify twice (the key
+ * table of §10.2). An inserted row is published on `user:{uid}:notifications` and, unless silent, enqueues
+ * `push.send` (dedupe key `push:{notificationId}`). `notifyStaff` reads active staff (index 35) and
+ * `notifyStoreMembers` the active supplier users of a store (index 37) inside the transaction.
  */
 import type { AppNotification, NotificationType } from '@instasupply/shared';
 import type { Tx } from '../../platform/db/tx';

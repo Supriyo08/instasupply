@@ -1,58 +1,56 @@
-import { pluralize } from '@instasupply/shared';
-import { useCallback, useMemo } from 'react';
+import { formatMoney, pluralize } from '@instasupply/shared';
+import { router } from 'expo-router';
+import { useCallback } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { ErrorState, Header, IconButton, Notice, Screen, SectionHeader } from '@/components/ui';
+import { Button, Card, ErrorState, Header, Notice, Screen, Text } from '@/components/ui';
 import { useCart } from '@/features/cart/CartProvider';
-import { useCartDetails, type CartItem } from '@/features/cart/useCartDetails';
-import { CartFooter } from '@/features/checkout/CartFooter';
-import { CartItemRow } from '@/features/checkout/CartItemRow';
+import { useCartPricing } from '@/features/cart/useCartPricing';
+import { AmountRows } from '@/features/checkout/AmountRows';
+import { CartPerks } from '@/features/checkout/CartPerks';
+import { CartStoreSection } from '@/features/checkout/CartStoreSection';
 import { EmptyCart, fillContent } from '@/features/checkout/EmptyCart';
-import { FreeDeliveryProgress } from '@/features/checkout/FreeDeliveryProgress';
-import { ScrollBody, scrollBodyContainer, useKeyboardReveal } from '@/features/checkout/KeyboardScroll';
-import { PromoCodeSection } from '@/features/checkout/PromoCodeSection';
+import { FulfilmentBar } from '@/features/checkout/FulfilmentBar';
+import { PromoField } from '@/features/checkout/PromoField';
 import { CartRowsSkeleton } from '@/features/checkout/Skeletons';
 import { useToast } from '@/features/notifications/ToastProvider';
-import { useOrders } from '@/features/orders/hooks';
-import { useCustomer } from '@/features/session/SessionProvider';
+import { useIsFirstOrder } from '@/features/orders/hooks';
+import { goToSignIn } from '@/features/session/RequireAccount';
+import { useUid } from '@/features/session/SessionProvider';
 import { confirmAction } from '@/lib/notify';
-import { colors } from '@/theme/tokens';
+import { spacing } from '@/theme/tokens';
 
+/**
+ * The cart, grouped by store (MARKETPLACE §7.3): each store's lines, load, fee preview and warnings,
+ * the order-level perks, promo code and totals. Guests can fill it; Checkout asks them to sign in.
+ */
 export default function CartScreen() {
-  const { user } = useCustomer();
+  const uid = useUid();
   const cart = useCart();
-  const { setQuantity } = cart;
+  const { groups, pricing, warnings, loading, error, retry } = useCartPricing();
+  const firstOrder = useIsFirstOrder();
   const toast = useToast();
-  const { items, priced, loading, error, retry, canCheckout, isFirstOrder } = useCartDetails(user.uid);
-  // Same query as the first-order check: only offer FIRST20 once the order history has loaded.
-  const orders = useOrders(user.uid, 20);
-  const keyboard = useKeyboardReveal();
+  const delivery = cart.fulfilment === 'delivery';
 
-  /** Cart lines whose product no longer exists in the catalogue (they have no row to show). */
-  const missingIds = useMemo(() => {
-    // Until the products have loaded (or if they couldn't be), no line is known to be gone.
-    if (loading || error) return [];
-    const present = new Set(items.map((item) => item.product.id));
-    return cart.lines.filter((line) => !present.has(line.productId)).map((line) => line.productId);
-  }, [loading, error, items, cart.lines]);
-
-  const removeItem = useCallback(
-    (item: CartItem) => {
-      setQuantity(item.product.id, 0);
+  const removeLine = useCallback(
+    (productId: string) => {
+      const line = cart.lines.find((item) => item.productId === productId);
+      if (!line) return;
+      cart.remove(productId);
       toast({
-        title: `Removed ${item.product.name}`,
+        title: 'Removed from your cart',
         body: 'Tap to undo',
         icon: 'trash-2',
-        onPress: () => setQuantity(item.product.id, item.quantity),
+        onPress: () => cart.setQuantity({ id: line.productId, storeId: line.storeId }, line.quantity),
       });
     },
-    [setQuantity, toast],
+    [cart, toast],
   );
 
   const clearCart = async () => {
     const confirmed = await confirmAction(
       'Clear your cart?',
-      'All items and any promo code will be removed.',
+      'Every item from every store and your promo code will be removed.',
       'Clear cart',
     );
     if (confirmed) cart.clear();
@@ -60,20 +58,22 @@ export default function CartScreen() {
 
   const header = (
     <Header
-      title="Shopping Cart"
+      title="Cart"
       right={
         cart.lines.length > 0 ? (
-          <IconButton
-            icon="trash-2"
-            label="Clear cart"
-            color={colors.textMuted}
-            onPress={() => void clearCart()}
-          />
-        ) : undefined
+          <Button label="Clear" variant="ghost" onPress={() => void clearCart()} style={styles.clear} />
+        ) : null
       }
     />
   );
 
+  if (!cart.ready || (loading && cart.lines.length > 0)) {
+    return (
+      <Screen header={header}>
+        <CartRowsSkeleton />
+      </Screen>
+    );
+  }
   if (cart.lines.length === 0) {
     return (
       <Screen header={header} contentStyle={fillContent}>
@@ -81,9 +81,6 @@ export default function CartScreen() {
       </Screen>
     );
   }
-
-  // The products couldn't be loaded, so there are no rows or prices to show and nothing to remove:
-  // only a way to try again. (The header can still clear the cart.)
   if (error) {
     return (
       <Screen header={header}>
@@ -92,77 +89,86 @@ export default function CartScreen() {
     );
   }
 
-  const initialLoading = loading && items.length === 0;
-  const hasUnavailable = missingIds.length > 0 || items.some((item) => item.unavailable);
-  const hasLimited = items.some((item) => item.limitedTo != null);
-  const blockedReason = loading
-    ? null
-    : hasUnavailable
-      ? 'Remove the unavailable items to check out.'
-      : hasLimited
-        ? 'Lower the quantities marked above to check out.'
-        : null;
+  const stockProblem = warnings.some((warning) => warning.kind !== 'pricing');
+  const orderWarnings = warnings.filter(
+    (warning) => warning.kind === 'pricing' && warning.storeId == null && warning.code !== 'no_dropoff',
+  );
+  const needsSite =
+    delivery && warnings.some((warning) => warning.kind === 'pricing' && warning.code === 'no_dropoff');
+  const canContinue = pricing != null && !stockProblem;
+  const deliveryList = pricing?.stores.reduce((sum, store) => sum + store.deliveryFeeListCents, 0) ?? null;
+
+  const checkout = () => {
+    if (!uid) goToSignIn('/checkout');
+    else router.push('/checkout');
+  };
 
   return (
     <Screen
       header={header}
-      scroll={false}
-      contentStyle={scrollBodyContainer}
       footer={
-        <CartFooter
-          priced={priced}
-          loading={initialLoading}
-          canCheckout={canCheckout}
-          blockedReason={blockedReason}
-        />
+        <>
+          {stockProblem ? (
+            <Text variant="caption" color="danger" align="center">
+              Fix the items marked in red to check out.
+            </Text>
+          ) : null}
+          <Button
+            label={pricing ? `Checkout · ${formatMoney(pricing.totalCents)}` : 'Checkout'}
+            trailingIcon="arrow-right"
+            disabled={!canContinue}
+            onPress={checkout}
+          />
+        </>
       }
     >
-      <ScrollBody ref={keyboard.scrollRef}>
-        {missingIds.length > 0 ? (
-          <Notice
-            tone="danger"
-            title={`${pluralize(missingIds.length, 'item')} no longer sold`}
-            message="These products were removed from the store, so we can't deliver them."
-            actionLabel="Remove"
-            onAction={() => missingIds.forEach((id) => setQuantity(id, 0))}
+      <FulfilmentBar />
+      {needsSite ? (
+        <Notice
+          tone="info"
+          icon="map-pin"
+          message="Choose your jobsite to see delivery fees and times."
+          actionLabel="Choose"
+          onAction={() => router.push('/site')}
+        />
+      ) : null}
+      {orderWarnings.map((warning, index) => (
+        <Notice key={index} tone="danger" message={warning.message} />
+      ))}
+
+      <Text variant="caption" color="muted">
+        {pluralize(cart.count, 'item')} from {pluralize(groups.length, 'store')}
+      </Text>
+      <View style={styles.groups}>
+        {groups.map((group) => (
+          <CartStoreSection key={group.storeId} group={group} onRemoveLine={removeLine} />
+        ))}
+      </View>
+
+      {pricing ? <CartPerks pricing={pricing} firstOrder={firstOrder} delivery={delivery} /> : null}
+      <PromoField promo={pricing?.promo ?? null} />
+      {pricing ? (
+        <Card style={styles.totals}>
+          <Text variant="heading">Order summary</Text>
+          <AmountRows
+            amounts={pricing}
+            delivery={delivery}
+            deliveryListCents={deliveryList}
+            discounts={pricing.discounts}
           />
-        ) : null}
-
-        {!initialLoading && priced.subtotal > 0 ? <FreeDeliveryProgress priced={priced} /> : null}
-
-        {initialLoading ? (
-          <CartRowsSkeleton count={Math.min(cart.lines.length, 4)} />
-        ) : (
-          <View style={styles.list}>
-            {items.map((item) => (
-              <CartItemRow
-                key={item.product.id}
-                item={item}
-                onQuantityChange={setQuantity}
-                onRemove={removeItem}
-              />
-            ))}
-          </View>
-        )}
-
-        <View style={styles.section} onLayout={keyboard.track('promo')}>
-          <SectionHeader title="Promo code" />
-          <PromoCodeSection
-            promoCode={cart.promoCode}
-            priced={priced}
-            checking={initialLoading}
-            showFirstOrderHint={isFirstOrder && !orders.loading && !orders.error}
-            onApply={cart.setPromoCode}
-            onRemove={() => cart.setPromoCode(null)}
-            onInputFocus={() => keyboard.reveal('promo')}
-          />
-        </View>
-      </ScrollBody>
+          {!uid ? (
+            <Text variant="caption" color="muted">
+              First-order perks are confirmed when you sign in.
+            </Text>
+          ) : null}
+        </Card>
+      ) : null}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  list: { gap: 12 },
-  section: { gap: 10 },
+  clear: { alignSelf: 'auto', minWidth: 72 },
+  groups: { gap: spacing.md },
+  totals: { gap: spacing.md },
 });

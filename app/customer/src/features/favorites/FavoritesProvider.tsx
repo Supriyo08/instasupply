@@ -1,62 +1,62 @@
-import { COLLECTIONS } from '@instasupply/shared';
-import {
-  collection,
-  deleteDoc,
-  doc,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-} from 'firebase/firestore';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-
-import { db } from '@/lib/firebase';
+import { queries } from '@instasupply/api-client';
+import { useApiMutation, useLiveQuery } from '@instasupply/api-client/react';
+import type { Favorite, WithId } from '@instasupply/shared';
+import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react';
 
 interface Favorites {
-  /** Most recent first. */
+  /** Product ids, most recent first. Empty for guests. */
   ids: string[];
-  /** False until the first snapshot (or error) arrives, so screens can tell "loading" from "none". */
+  /** False until the list has loaded: show a skeleton, not the empty state. True at once for guests. */
   ready: boolean;
+  error: unknown;
+  retry: () => void;
   isFavorite: (productId: string) => boolean;
+  /** Adds or removes, optimistically (docs/CLIENTS.md §1.12). Rejects with ApiError; guests can't save. */
   toggle: (productId: string) => Promise<void>;
 }
 
 const FavoritesContext = createContext<Favorites | null>(null);
 
-/** One listener for the whole app, so every product card can show its heart cheaply. */
-export function FavoritesProvider({ uid, children }: { uid: string; children: ReactNode }) {
-  const [ids, setIds] = useState<string[]>([]);
-  const [ready, setReady] = useState(false);
+/** One query for the whole shop, so every product card can show its heart cheaply. */
+export function FavoritesProvider({ uid, children }: { uid: string | null; children: ReactNode }) {
+  const query = queries.favorites(uid);
+  const result = useLiveQuery(query);
+  const ids = useMemo(() => result.data.map((favorite) => favorite.productId), [result.data]);
 
-  useEffect(
-    () =>
-      onSnapshot(
-        query(collection(db, COLLECTIONS.users, uid, COLLECTIONS.favorites), orderBy('createdAt', 'desc')),
-        (snapshot) => {
-          setIds(snapshot.docs.map((item) => item.id));
-          setReady(true);
-        },
-        () => {
-          setIds([]);
-          setReady(true);
-        },
-      ),
-    [uid],
+  const mutation = useApiMutation<{ productId: string; on: boolean }, unknown>(
+    (api, { productId, on }) => (on ? api.favorites.add(productId) : api.favorites.remove(productId)),
+    {
+      optimistic: (cache, { productId, on }) =>
+        cache.patch<WithId<Favorite>[]>(query.key, (current) =>
+          on
+            ? [
+                { id: productId, productId, createdAt: Date.now() },
+                ...current.filter((item) => item.productId !== productId),
+              ]
+            : current.filter((item) => item.productId !== productId),
+        ),
+    },
   );
+  const { run } = mutation;
 
   const toggle = useCallback(
     async (productId: string) => {
-      const ref = doc(db, COLLECTIONS.users, uid, COLLECTIONS.favorites, productId);
-      if (ids.includes(productId)) await deleteDoc(ref);
-      else await setDoc(ref, { productId, createdAt: serverTimestamp() });
+      if (!uid) throw new Error('Sign in to save items.');
+      await run({ productId, on: !ids.includes(productId) });
     },
-    [ids, uid],
+    [uid, ids, run],
   );
 
   const value = useMemo<Favorites>(
-    () => ({ ids, ready, isFavorite: (productId) => ids.includes(productId), toggle }),
-    [ids, ready, toggle],
+    () => ({
+      ids,
+      ready: !uid || !result.loading,
+      error: result.error,
+      retry: result.retry,
+      isFavorite: (productId) => ids.includes(productId),
+      toggle,
+    }),
+    [ids, uid, result.loading, result.error, result.retry, toggle],
   );
   return <FavoritesContext.Provider value={value}>{children}</FavoritesContext.Provider>;
 }

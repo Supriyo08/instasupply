@@ -71,3 +71,17 @@ export function destinationIcon(): L.DivIcon {
     }),
   );
 }
+
+/** A store (supplier yard): storefront glyph on the tone colour. */
+export function storeIcon(options: { color?: string; active?: boolean } = {}): L.DivIcon {
+  const color = options.color ?? '#b45309';
+  return cached(`store|${color}|${options.active}`, () =>
+    L.divIcon({
+      className: 'is-marker',
+      iconSize: [34, 34],
+      iconAnchor: [17, 17],
+      tooltipAnchor: [16, 0],
+      html: `<div class="is-home${options.active ? ' is-home--active' : ''}" style="background:${color}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-1.5-5h-15z"/><path d="M5 9v11h14V9"/><path d="M10 20v-6h4v6"/></svg></div>`,
+    }),
+  );
+}

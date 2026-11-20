@@ -1,170 +1,280 @@
-import { ORDER_OPEN_STATUSES, ORDER_STATUS_META } from '@instasupply/shared';
-import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
+/**
+ * `/orders` (MARKETPLACE §9, CLIENTS §4.5): two tabs. "Orders" lists parent orders (filters: status,
+ * store, needs attention); "Store orders" lists every store's part with its SLA timer (filters:
+ * status, store, overdue for acceptance). Both are paged and live, filtered by the server. Counts come
+ * from `GET /ops/dashboard`, never from a page of rows (R47, R48).
+ */
+import type { QueryValue } from '@instasupply/api-client';
+import {
+  ORDER_STATUSES,
+  ORDER_STATUS_META,
+  STORE_ORDER_META,
+  STORE_ORDER_STATUSES,
+  formatMoney,
+  formatRelativeTime,
+  orderHeadline,
+  type Order,
+} from '@instasupply/shared';
+import { useMemo } from 'react';
+import { Link, useSearchParams } from 'react-router';
 
-import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { EmptyState, ErrorState } from '@/components/ui/Feedback';
-import { Select, TextInput } from '@/components/ui/Form';
-import { DownloadIcon, OrdersIcon, SearchIcon } from '@/components/ui/icons';
-import { PageHeader, Tabs, type TabItem } from '@/components/ui/Layout';
-import { useNow, useOpenOrders } from '@/lib/data';
+import { LoadMore } from '@/components/ui/Data';
+import { ErrorState, PageSpinner } from '@/components/ui/Feedback';
+import { Select, Toggle } from '@/components/ui/Form';
+import { ChevronRightIcon } from '@/components/ui/icons';
+import { PageHeader, Tabs } from '@/components/ui/Layout';
+import { LiveStatusBar } from '@/components/ui/LiveStatus';
+import { StoreSelect } from '@/features/stores/components/StoreSelect';
+import { useNow, useOpsDashboard } from '@/lib/data';
 
-import { OrderKpis } from './components/OrderKpis';
-import { OrdersTable, OrdersTableSkeleton } from './components/OrdersTable';
-import { ORDER_LIST_LIMIT, useLatestOrders, useOrdersWithStatus } from './hooks';
-import { matchesOrderSearch, parseStatusParam, type OrderTab } from './order-format';
-import { downloadOrdersCsv, localStamp } from './orders-csv';
+import { ArtEmptyState } from './components/ItemThumb';
+import { AttentionBadge, OrderStatusBadge, PaymentBadge } from './components/OrderBadges';
+import { StoreOrdersTable } from './components/StoreOrdersTable';
+import { useOpsOrders, useOpsStoreOrders } from './hooks';
+import { customerLine, orderHref } from './order-format';
 
-const EMPTY: Record<OrderTab, { title: string; description: string }> = {
-  open: { title: 'No open orders', description: 'New orders show up here as soon as a shopper checks out.' },
-  attention: {
-    title: 'Nothing needs attention',
-    description: 'Orders whose delivery attempt failed show up here so you can retry or cancel them.',
-  },
-  delivered: {
-    title: 'No delivered orders yet',
-    description: 'Orders move here once the driver completes the delivery.',
-  },
-  cancelled: {
-    title: 'No cancelled orders',
-    description: 'Orders cancelled by shoppers or the store show up here.',
-  },
-  all: { title: 'No orders yet', description: 'Orders placed in the customer app show up here.' },
-};
+type Tab = 'orders' | 'store-orders';
+
+function OrdersTable({ orders, now }: { orders: Order[]; now: number }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-left text-sm">
+        <caption className="sr-only">Orders, newest first</caption>
+        <thead className="border-b border-slate-200 bg-slate-50/70 text-xs text-slate-500">
+          <tr>
+            <th scope="col" className="px-5 py-3 font-medium">
+              Order
+            </th>
+            <th scope="col" className="px-3 py-3 font-medium">
+              Customer
+            </th>
+            <th scope="col" className="hidden px-3 py-3 font-medium lg:table-cell">
+              Stores
+            </th>
+            <th scope="col" className="px-3 py-3 font-medium">
+              Status
+            </th>
+            <th scope="col" className="px-3 py-3 text-right font-medium">
+              Total
+            </th>
+            <th scope="col" className="w-10 py-3 pr-5">
+              <span className="sr-only">Open</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {orders.map((order) => (
+            <tr key={order.id} className="transition-colors hover:bg-slate-50">
+              <td className="px-5 py-3 align-top">
+                <Link
+                  to={orderHref(order.id)}
+                  className="font-mono text-[13px] font-semibold text-slate-900 hover:text-brand-700"
+                >
+                  {order.number}
+                </Link>
+                <p className="mt-1 text-xs whitespace-nowrap text-slate-400">
+                  {formatRelativeTime(order.createdAt, now)}
+                  {order.source !== 'cart' ? ` · ${order.source}` : ''}
+                </p>
+              </td>
+              <td className="max-w-60 px-3 py-3 align-top">
+                <p className="truncate font-medium text-slate-900">{customerLine(order)}</p>
+                <p className="truncate text-xs text-slate-500">
+                  {order.fulfilment === 'pickup' ? 'Pickup' : (order.jobsite?.areaLabel ?? 'Jobsite')}
+                  {order.window ? ` · ${order.window.label}` : ''}
+                </p>
+              </td>
+              <td className="hidden max-w-60 px-3 py-3 align-top lg:table-cell">
+                <p className="truncate text-slate-700">
+                  {order.storeOrders.map((so) => so.storeName).join(', ')}
+                </p>
+                <p className="truncate text-xs text-slate-400">{order.itemsSummary}</p>
+              </td>
+              <td className="px-3 py-3 align-top">
+                <div className="flex flex-wrap gap-1.5">
+                  <OrderStatusBadge status={order.status} />
+                  {order.needsAttention ? <AttentionBadge /> : null}
+                </div>
+                <p className="mt-1 text-xs text-slate-500">{orderHeadline(order)}</p>
+              </td>
+              <td className="px-3 py-3 text-right align-top">
+                <p className="font-medium text-slate-900 tabular-nums">
+                  {formatMoney(order.current.totalCents)}
+                </p>
+                <PaymentBadge status={order.payment.status} className="mt-1" />
+              </td>
+              <td className="py-3 pr-5 align-top text-slate-300">
+                <ChevronRightIcon size={16} aria-hidden />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OrdersTab({ status, storeId, attention }: { status: string; storeId: string; attention: boolean }) {
+  const now = useNow();
+  const filters = useMemo(() => {
+    const next: Record<string, QueryValue> = {};
+    if (status) next.status = status;
+    if (storeId) next.storeId = storeId;
+    if (attention) next.needsAttention = true;
+    return next;
+  }, [attention, status, storeId]);
+  const orders = useOpsOrders(filters);
+
+  if (orders.loading && orders.items.length === 0) return <PageSpinner label="Loading orders" />;
+  if (orders.error && orders.items.length === 0) {
+    return <ErrorState error={orders.error} onRetry={orders.retry} className="m-5" />;
+  }
+  if (orders.items.length === 0) {
+    return (
+      <ArtEmptyState
+        artKey={attention ? 'scene-order-confirmed' : 'scene-jobsite-delivery'}
+        title={attention ? 'Nothing needs attention' : 'No orders match'}
+        description={
+          attention
+            ? 'Failed deliveries and stores that did not accept in time show up here.'
+            : 'Try another status or store.'
+        }
+      />
+    );
+  }
+  return (
+    <>
+      <OrdersTable orders={orders.items} now={now} />
+      <LoadMore hasMore={orders.hasMore} loadingMore={orders.loadingMore} onLoadMore={orders.loadMore} />
+    </>
+  );
+}
+
+function StoreOrdersTab({ status, storeId, overdue }: { status: string; storeId: string; overdue: boolean }) {
+  const now = useNow();
+  const filters = useMemo(() => {
+    const next: Record<string, QueryValue> = {};
+    if (status) next.status = status;
+    if (storeId) next.storeId = storeId;
+    if (overdue) next.acceptOverdue = true;
+    return next;
+  }, [overdue, status, storeId]);
+  const storeOrders = useOpsStoreOrders(filters);
+
+  if (storeOrders.loading && storeOrders.items.length === 0)
+    return <PageSpinner label="Loading store orders" />;
+  if (storeOrders.error && storeOrders.items.length === 0) {
+    return <ErrorState error={storeOrders.error} onRetry={storeOrders.retry} className="m-5" />;
+  }
+  if (storeOrders.items.length === 0) {
+    return (
+      <ArtEmptyState
+        artKey="scene-local-suppliers"
+        title={overdue ? 'Every store answered in time' : 'No store orders match'}
+        description={
+          overdue
+            ? 'Store orders not accepted by their deadline show up here.'
+            : 'Try another status or store.'
+        }
+      />
+    );
+  }
+  return (
+    <>
+      <StoreOrdersTable storeOrders={storeOrders.items} now={now} />
+      <LoadMore
+        hasMore={storeOrders.hasMore}
+        loadingMore={storeOrders.loadingMore}
+        onLoadMore={storeOrders.loadMore}
+      />
+    </>
+  );
+}
 
 export default function OrdersPage() {
-  const now = useNow();
   const [params, setParams] = useSearchParams();
-  const filter = parseStatusParam(params.get('status'));
-  const [search, setSearch] = useState('');
+  const tab: Tab = params.get('tab') === 'store-orders' ? 'store-orders' : 'orders';
+  const status = params.get('status') ?? '';
+  const storeId = params.get('store') ?? '';
+  const flag = params.get('attention') === '1';
+  const dashboard = useOpsDashboard().data;
 
-  // Open and failed orders are always live (tab counts); history loads only while its tab is shown.
-  // One listener per tab, so switching tabs never shows the previous tab's rows while loading.
-  const open = useOpenOrders();
-  const attention = useOrdersWithStatus('failed');
-  const delivered = useOrdersWithStatus(filter.tab === 'delivered' ? 'delivered' : null);
-  const cancelled = useOrdersWithStatus(filter.tab === 'cancelled' ? 'cancelled' : null);
-  const all = useLatestOrders(filter.tab === 'all');
-  const source = { open, attention, delivered, cancelled, all }[filter.tab];
-
-  const visible = useMemo(
-    () =>
-      source.data.filter(
-        (order) =>
-          (filter.status ? order.status === filter.status : true) && matchesOrderSearch(order, search),
-      ),
-    [filter.status, search, source.data],
-  );
-
-  const setStatus = (value: string | null) => {
+  const update = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
-    if (value && value !== 'open') next.set('status', value);
-    else next.delete('status');
+    for (const [key, value] of Object.entries(patch)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
     setParams(next, { replace: true });
   };
 
-  const clearFilters = () => {
-    setSearch('');
-    if (filter.status) setStatus(null);
-  };
-
-  const exportCsv = () =>
-    downloadOrdersCsv(
-      visible,
-      `instasupply-orders-${filter.status ?? filter.tab}-${localStamp(Date.now())}.csv`,
-    );
-
-  const tabs: TabItem<OrderTab>[] = [
-    { value: 'open', label: 'Open', count: open.data.length },
-    { value: 'attention', label: 'Needs attention', count: attention.data.length },
-    { value: 'delivered', label: 'Delivered' },
-    { value: 'cancelled', label: 'Cancelled' },
-    { value: 'all', label: 'All' },
-  ];
-
-  const filtered = !!search.trim() || !!filter.status;
-  const loading = source.loading && source.data.length === 0;
-  const capped = filter.tab !== 'open' && source.data.length >= ORDER_LIST_LIMIT;
+  const statusOptions =
+    tab === 'orders'
+      ? ORDER_STATUSES.map((value) => ({ value, label: ORDER_STATUS_META[value].label }))
+      : STORE_ORDER_STATUSES.map((value) => ({ value, label: STORE_ORDER_META[value].label }));
 
   return (
     <>
       <PageHeader
         title="Orders"
-        description="Shop orders from the customer app, from checkout to the doorstep."
-        actions={
-          <Button variant="secondary" icon={DownloadIcon} onClick={exportCsv} disabled={visible.length === 0}>
-            Export CSV
-          </Button>
-        }
+        description="Every order placed in the InstaSupply app, and each store's part of it."
+        actions={<LiveStatusBar />}
       />
-
-      <OrderKpis now={now} openOrders={open.data} openLoading={open.loading} />
-
-      <Card>
-        <div className="px-5 pt-2">
-          <Tabs ariaLabel="Order status" items={tabs} value={filter.tab} onChange={setStatus} />
+      <Tabs<Tab>
+        ariaLabel="Order views"
+        value={tab}
+        onChange={(value) =>
+          update({ tab: value === 'orders' ? null : value, status: null, attention: null })
+        }
+        items={[
+          { value: 'orders', label: 'Orders' },
+          {
+            value: 'store-orders',
+            label: 'Store orders',
+            count: dashboard?.acceptOverdue ? dashboard.acceptOverdue : undefined,
+          },
+        ]}
+      />
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <div className="w-48">
+          <Select
+            aria-label="Status"
+            value={status}
+            onChange={(event) => update({ status: event.target.value || null })}
+          >
+            <option value="">All statuses</option>
+            {statusOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
         </div>
-        <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-3 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
-            <SearchIcon
-              size={16}
-              className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400"
-              aria-hidden
-            />
-            <TextInput
-              aria-label="Search orders"
-              className="pl-9"
-              placeholder="Search order number, customer, phone or city"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-          </div>
-          {filter.tab === 'open' ? (
-            <Select
-              aria-label="Filter open orders by status"
-              className="sm:w-52"
-              value={filter.status ?? ''}
-              onChange={(event) => setStatus(event.target.value || null)}
-            >
-              <option value="">All open orders</option>
-              {ORDER_OPEN_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {ORDER_STATUS_META[status].label}
-                </option>
-              ))}
-            </Select>
-          ) : null}
+        <div className="w-56">
+          <StoreSelect value={storeId} onChange={(value) => update({ store: value || null })} />
         </div>
-
-        {source.error ? (
-          <ErrorState error={source.error} className="m-5" />
-        ) : loading ? (
-          <OrdersTableSkeleton />
-        ) : visible.length === 0 ? (
-          <EmptyState
-            icon={OrdersIcon}
-            title={filtered ? 'No orders match your filters' : EMPTY[filter.tab].title}
-            description={
-              filtered ? 'Try a different order number, name, phone or city.' : EMPTY[filter.tab].description
-            }
-            action={
-              filtered ? (
-                <Button variant="secondary" onClick={clearFilters}>
-                  Clear filters
-                </Button>
-              ) : undefined
-            }
-          />
+        <Toggle
+          checked={flag}
+          onChange={(checked) => update({ attention: checked ? '1' : null })}
+          label={tab === 'orders' ? 'Needs attention' : 'Overdue for acceptance'}
+          description={
+            tab === 'orders'
+              ? dashboard
+                ? `${dashboard.failedDeliveries} failed deliveries, ${dashboard.acceptOverdue} overdue acceptances`
+                : 'Failed deliveries and late acceptances'
+              : dashboard
+                ? `${dashboard.acceptOverdue} right now`
+                : 'Not accepted by the deadline'
+          }
+        />
+      </div>
+      <Card className="mt-4 overflow-hidden" role="tabpanel">
+        {tab === 'orders' ? (
+          <OrdersTab status={status} storeId={storeId} attention={flag} />
         ) : (
-          <OrdersTable orders={visible} now={now} />
+          <StoreOrdersTab status={status} storeId={storeId} overdue={flag} />
         )}
-
-        {capped && !source.error ? (
-          <p className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
-            Showing the latest {ORDER_LIST_LIMIT} orders.
-          </p>
-        ) : null}
       </Card>
     </>
   );

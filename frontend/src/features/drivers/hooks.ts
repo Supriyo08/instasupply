@@ -1,58 +1,33 @@
-import { COLLECTIONS, type Delivery, type DriverLocation, type UserProfile } from '@instasupply/shared';
-import { collection, doc, getCountFromServer, limit, orderBy, query, where } from 'firebase/firestore';
-import { useEffect, useMemo, useState } from 'react';
+import { useApiQuery, useLiveQuery } from '@instasupply/api-client/react';
+import { useMemo } from 'react';
 
-import { db } from '@/lib/firebase/app';
-import { useCollection, useDocument } from '@/lib/firebase/hooks';
+import { queries } from '@/lib/api';
+import { useDriverLocations } from '@/lib/data';
 
+/** A driver's profile (`GET /users/{uid}`), live over the ops drivers topic. */
 export function useDriver(driverId: string | undefined) {
-  const ref = useMemo(() => (driverId ? doc(db, COLLECTIONS.users, driverId) : null), [driverId]);
-  return useDocument<UserProfile>(ref);
+  const result = useLiveQuery(queries.user(driverId));
+  const { data: profile } = result;
+  const data = useMemo(() => (profile ? { ...profile, id: profile.uid } : null), [profile]);
+  return { ...result, data };
 }
 
+/** A selector over the fleet's location list, so the driver page shares the live map's one subscription. */
 export function useDriverLocation(driverId: string | undefined) {
-  const ref = useMemo(() => (driverId ? doc(db, COLLECTIONS.driverLocations, driverId) : null), [driverId]);
-  return useDocument<DriverLocation>(ref);
-}
-
-export function useDriverDeliveries(driverId: string | undefined, count = 50) {
-  const q = useMemo(
-    () =>
-      driverId
-        ? query(
-            collection(db, COLLECTIONS.deliveries),
-            where('driverId', '==', driverId),
-            orderBy('createdAt', 'desc'),
-            limit(count),
-          )
-        : null,
-    [count, driverId],
+  const locations = useDriverLocations();
+  const data = useMemo(
+    () => (driverId ? (locations.data.find((item) => item.id === driverId) ?? null) : null),
+    [driverId, locations.data],
   );
-  return useCollection<Delivery>(q);
+  return { ...locations, data };
 }
 
-/** All-time totals via aggregation queries (cheap: one read per 1000 matching docs). */
+/** The driver's deliveries, newest first. */
+export function useDriverDeliveries(driverId: string | undefined) {
+  return useLiveQuery(queries.driverDeliveries(driverId));
+}
+
+/** All-time delivered and failed counts (`GET /deliveries/stats`). */
 export function useDriverTotals(driverId: string | undefined) {
-  const [totals, setTotals] = useState<{ delivered: number; failed: number } | null>(null);
-
-  useEffect(() => {
-    if (!driverId) return;
-    let cancelled = false;
-    const countWith = (status: 'delivered' | 'failed') =>
-      getCountFromServer(
-        query(
-          collection(db, COLLECTIONS.deliveries),
-          where('driverId', '==', driverId),
-          where('status', '==', status),
-        ),
-      ).then((snapshot) => snapshot.data().count);
-    Promise.all([countWith('delivered'), countWith('failed')])
-      .then(([delivered, failed]) => !cancelled && setTotals({ delivered, failed }))
-      .catch(() => !cancelled && setTotals(null));
-    return () => {
-      cancelled = true;
-    };
-  }, [driverId]);
-
-  return totals;
+  return useApiQuery(queries.deliveryStats(driverId, 0));
 }

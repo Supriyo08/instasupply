@@ -1,5 +1,5 @@
-import { describeError } from '@instasupply/expo-firebase';
-import { router } from 'expo-router';
+import { describeError } from '@instasupply/api-client';
+import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View, type TextInputInstance } from 'react-native';
 
@@ -19,9 +19,11 @@ import { validateEmail, type FieldErrors } from '@/features/session/components/v
 import { spacing } from '@/theme/tokens';
 
 export default function LoginScreen() {
+  // A 🔒 screen sends guests here with `?next=` its path; signing in goes back there.
+  const { next: nextPath } = useLocalSearchParams<{ next?: string }>();
   const [email, setEmail] = useState(getDraftEmail);
   const [password, setPassword] = useState('');
-  // Firebase keeps the session either way; "Remember me" keeps the email for next time.
+  // The session is kept either way; "Remember me" keeps the email for next time.
   const [remember, setRemember] = useState(true);
   const [errors, setErrors] = useState<FieldErrors<'email' | 'password'>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -61,7 +63,8 @@ export default function LoginScreen() {
     try {
       await signIn(email, password);
       void saveRememberedEmail(remember ? email.trim().toLowerCase() : null);
-      // Nothing else to do: the router moves on once the session updates.
+      // The (auth) group closes once the session is ready; `next` returns to the screen that asked.
+      if (nextPath?.startsWith('/')) router.dismissTo(nextPath as Href);
     } catch (error) {
       setFormError(describeError(error));
       setBusy(false);
@@ -122,7 +125,7 @@ export default function LoginScreen() {
       <AuthSwitch
         prompt="Don't have an account?"
         action="Sign up"
-        onPress={() => router.replace('/signup')}
+        onPress={() => router.replace({ pathname: '/signup', params: nextPath ? { next: nextPath } : {} })}
       />
     </AuthScaffold>
   );

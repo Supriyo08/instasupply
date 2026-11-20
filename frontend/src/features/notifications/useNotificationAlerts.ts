@@ -3,17 +3,32 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { useToast } from '@/components/ui/Toast';
-import type { WithId } from '@/lib/firebase/hooks';
 
-import { notificationLink } from './useNotifications';
+import { freshIds, isNotificationAlertClaimed } from './alert-state';
+import { notificationHref, type LinkAudience } from './notification-links';
 
 const supported = typeof window !== 'undefined' && 'Notification' in window;
 
+const ERROR_TYPES = new Set<AppNotification['type']>([
+  'delivery_failed',
+  'delivery_declined',
+  'store_order_late',
+  'capture_failed',
+  'job_unclaimed',
+]);
+
 /**
- * Shows a toast (and a desktop notification when the tab is in the background) for every
- * notification that arrives after the app loaded. The initial snapshot is not announced.
+ * A toast (and a desktop notification while the tab is hidden) for every notification that arrives
+ * after the page loaded. The first successful answer is not announced (an initial error is not an
+ * answer). Types a mounted screen announces itself (`claimNotificationAlerts`, the portal board's
+ * `store_order_new`) are skipped so nothing is announced twice.
  */
-export function useNotificationAlerts(notifications: WithId<AppNotification>[], loading: boolean) {
+export function useNotificationAlerts(
+  notifications: readonly AppNotification[],
+  loading: boolean,
+  audience: LinkAudience,
+  error: unknown = null,
+) {
   const toast = useToast();
   const navigate = useNavigate();
   const seen = useRef<Set<string> | null>(null);
@@ -22,18 +37,21 @@ export function useNotificationAlerts(notifications: WithId<AppNotification>[], 
   );
 
   useEffect(() => {
-    if (loading) return;
-    if (!seen.current) {
-      seen.current = new Set(notifications.map((item) => item.id));
-      return;
-    }
-    const fresh = notifications.filter((item) => !seen.current!.has(item.id));
-    fresh.forEach((item) => seen.current!.add(item.id));
+    if (loading || error) return;
+    const next = freshIds(
+      seen.current,
+      notifications.map((item) => item.id),
+    );
+    seen.current = next.known;
+    const freshSet = new Set(next.fresh);
+    const fresh = notifications.filter(
+      (item) => freshSet.has(item.id) && !item.read && !isNotificationAlertClaimed(item.type),
+    );
 
-    for (const item of fresh.filter((notification) => !notification.read).slice(0, 3)) {
-      const link = notificationLink(item);
+    for (const item of fresh.slice(0, 3)) {
+      const link = notificationHref(item, audience);
       toast.show({
-        tone: item.type === 'delivery_failed' || item.type === 'delivery_declined' ? 'error' : 'info',
+        tone: ERROR_TYPES.has(item.type) ? 'error' : 'info',
         title: item.title,
         description: item.body,
         action: link ? { label: 'View', onClick: () => navigate(link) } : undefined,
@@ -47,7 +65,7 @@ export function useNotificationAlerts(notifications: WithId<AppNotification>[], 
         };
       }
     }
-  }, [loading, navigate, notifications, toast]);
+  }, [audience, error, loading, navigate, notifications, toast]);
 
   const requestPermission = useCallback(async () => {
     if (!supported) return;

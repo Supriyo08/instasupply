@@ -39,8 +39,8 @@ export default defineConfig(
     },
   },
   {
-    // Everything that renders UI: the web console and the two Expo apps.
-    files: ['frontend/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}'],
+    // Everything that renders UI or ships hooks: the web console, the two Expo apps and the API client.
+    files: ['frontend/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}', 'packages/api-client/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     languageOptions: { globals: { ...globals.browser } },
     rules: {

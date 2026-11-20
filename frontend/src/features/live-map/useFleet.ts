@@ -36,5 +36,10 @@ export function useFleet() {
     rows,
     loading: drivers.loading || locations.loading || open.loading,
     error: drivers.error ?? locations.error ?? open.error,
+    retry: () => {
+      drivers.retry();
+      locations.retry();
+      open.retry();
+    },
   };
 }

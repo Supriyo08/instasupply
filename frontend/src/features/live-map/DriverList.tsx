@@ -3,6 +3,7 @@ import { formatRelativeTime, pluralize, STATUS_META } from '@instasupply/shared'
 import { Avatar } from '@/components/ui/Avatar';
 import { BatteryIcon } from '@/components/ui/icons';
 import { cn } from '@/lib/cn';
+import { vehicleClassLabel } from '@/features/deliveries/delivery-format';
 import { presenceOf, type DeliveryRecord, type DriverRecord, type LocationRecord } from '@/lib/data';
 
 export interface DriverRow {
@@ -40,6 +41,7 @@ export function DriverList({
         const current = active.find(
           (delivery) => delivery.status === 'in_transit' || delivery.status === 'arrived',
         );
+        const toStore = active.find((delivery) => delivery.pickup && delivery.pickup.collectedAt == null);
         const selected = driver.id === selectedId;
         return (
           <li key={driver.id}>
@@ -63,12 +65,19 @@ export function DriverList({
                 <span className="mt-0.5 block truncate text-xs text-slate-500">
                   {current
                     ? `${STATUS_META[current.status].label} → ${current.orderId} · ${current.customer.name}`
-                    : active.length
-                      ? `${pluralize(active.length, 'stop')} planned`
-                      : presence === 'offline'
-                        ? 'Offline'
-                        : 'Available'}
+                    : toStore?.pickup
+                      ? `Heading to ${toStore.pickup.storeName} · ${toStore.orderId}`
+                      : active.length
+                        ? `${pluralize(active.length, 'job')} planned`
+                        : presence === 'offline'
+                          ? 'Offline'
+                          : 'Available'}
                 </span>
+                {driver.vehicle ? (
+                  <span className="mt-0.5 block truncate text-[11px] text-slate-400">
+                    {vehicleClassLabel(driver.vehicle.capacityClass)} · {driver.vehicle.plate}
+                  </span>
+                ) : null}
                 {location?.battery != null && presence !== 'offline' ? (
                   <span
                     className={cn(

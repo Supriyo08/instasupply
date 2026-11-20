@@ -1,4 +1,4 @@
-import { RequireStaff } from './guards/RequireStaff';
+import { RequireStaff } from './guards/guards';
 import { AppLayout } from './layouts/AppLayout';
 
 export default function ProtectedLayout() {

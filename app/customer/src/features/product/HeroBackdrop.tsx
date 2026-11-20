@@ -4,7 +4,7 @@ import Svg, { Path } from 'react-native-svg';
 import { colors } from '@/theme/tokens';
 
 /**
- * Backdrop of the product hero (Big Cart "Organic Lemons"): a pastel blob with a soft curved
+ * Backdrop of the product hero (the Big Cart product page): a pastel blob with a soft curved
  * bottom edge, drawn in two layers for depth, plus a few floating highlights. Fills its parent,
  * so render it first inside a positioned container.
  */

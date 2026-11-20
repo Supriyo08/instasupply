@@ -1,20 +1,17 @@
-import { formatRelativeTime } from '@instasupply/shared';
 import { Platform, StyleSheet, Switch, View } from 'react-native';
 
 import { Banner, Card, Text } from '@/components/ui';
+import { useNow } from '@/lib/use-now';
 import { useTheme } from '@/theme/ThemeProvider';
 
-import { usePresence } from './PresenceProvider';
+import { presenceSubtitle, usePresence } from './PresenceProvider';
 
 export function OnlineCard() {
   const { colors } = useTheme();
   const { online, busy, error, lastFix, backgroundEnabled, permission, setOnline } = usePresence();
 
-  const subtitle = online
-    ? lastFix
-      ? `Sharing live location · updated ${formatRelativeTime(lastFix.at)}`
-      : 'Getting your location…'
-    : 'Go online to share your location and receive live updates.';
+  const now = useNow();
+  const subtitle = presenceSubtitle({ online, lastFix }, now);
 
   return (
     <Card accent={online ? colors.success : undefined}>

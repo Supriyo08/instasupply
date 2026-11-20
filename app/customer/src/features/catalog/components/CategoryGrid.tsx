@@ -1,18 +1,16 @@
 import type { Category } from '@instasupply/shared';
 import { router } from 'expo-router';
-import { useMemo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
-import { ArtImage, EmptyState, ErrorState, Skeleton, Text } from '@/components/ui';
-import { useCategories } from '@/features/catalog/hooks';
+import { ArtImage, Icon, Skeleton, Text } from '@/components/ui';
 import { colors, radius, spacing } from '@/theme/tokens';
-
-import { sortCategories, type CategorySort } from './CategorySortSheet';
 
 const COLUMNS = 3;
 const CIRCLE = 64;
 /** Shared by tiles and spacers: flex cells with padding only line up when every cell has it. */
 const CELL_PADDING = 6;
+
+type Cell = { kind: 'category'; category: Category } | { kind: 'all' };
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
   const rows: T[][] = [];
@@ -20,29 +18,32 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
   return rows;
 }
 
-/** Categories screen body: three columns of white tiles, with loading, error and empty states. */
-export function CategoriesContent({ sort }: { sort: CategorySort }) {
-  const { data, loading, error, retry } = useCategories();
-  const sorted = useMemo(() => sortCategories(data, sort), [data, sort]);
-
-  if (loading) return <CategoryGridSkeleton />;
-  if (error) return <ErrorState title="Couldn't load categories" error={error} onRetry={retry} />;
-  if (sorted.length === 0) {
-    return (
-      <EmptyState
-        art="scene-local-suppliers"
-        title="No categories yet"
-        message="We're stocking the shelves. Check back in a little while."
-      />
-    );
-  }
+/**
+ * Three columns of white tiles with the 3D category icon on its pastel circle. `seeAll` adds a last
+ * tile that opens every category (Home shows 8 + "See all").
+ */
+export function CategoryGrid({
+  categories,
+  seeAll = false,
+}: {
+  categories: readonly Category[];
+  seeAll?: boolean;
+}) {
+  const cells: Cell[] = [
+    ...categories.map((category): Cell => ({ kind: 'category', category })),
+    ...(seeAll ? [{ kind: 'all' } as const] : []),
+  ];
   return (
     <View style={styles.grid}>
-      {chunk(sorted, COLUMNS).map((row) => (
-        <View key={row.map((category) => category.id).join('-')} style={styles.row}>
-          {row.map((category) => (
-            <CategoryTile key={category.id} category={category} />
-          ))}
+      {chunk(cells, COLUMNS).map((row, rowIndex) => (
+        <View key={rowIndex} style={styles.row}>
+          {row.map((cell) =>
+            cell.kind === 'category' ? (
+              <CategoryTile key={cell.category.id} category={cell.category} />
+            ) : (
+              <SeeAllTile key="all" />
+            ),
+          )}
           {Array.from({ length: COLUMNS - row.length }, (_, spacer) => (
             <View key={`spacer-${spacer}`} style={styles.spacer} />
           ))}
@@ -57,12 +58,12 @@ function CategoryTile({ category }: { category: Category }) {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={category.name}
-      accessibilityHint="Shows the products in this category"
+      accessibilityHint="Shows this category across nearby stores"
       onPress={() => router.push(`/category/${category.id}`)}
       style={({ pressed }) => [styles.tile, pressed ? styles.pressed : null]}
     >
       <View style={[styles.circle, { backgroundColor: category.tint }]}>
-        <ArtImage artKey={category.iconKey} size={38} />
+        <ArtImage artKey={category.iconKey} size={44} />
       </View>
       <Text variant="caption" color="muted" align="center" numberOfLines={1}>
         {category.name}
@@ -71,10 +72,28 @@ function CategoryTile({ category }: { category: Category }) {
   );
 }
 
-function CategoryGridSkeleton() {
+function SeeAllTile() {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="See all categories"
+      onPress={() => router.push('/categories')}
+      style={({ pressed }) => [styles.tile, pressed ? styles.pressed : null]}
+    >
+      <View style={[styles.circle, { backgroundColor: colors.primarySoft }]}>
+        <Icon name="grid" size={26} color={colors.primaryDark} />
+      </View>
+      <Text variant="captionMedium" color="primaryDark" align="center" numberOfLines={1}>
+        See all
+      </Text>
+    </Pressable>
+  );
+}
+
+export function CategoryGridSkeleton({ rows = 3 }: { rows?: number }) {
   return (
     <View style={styles.grid} accessibilityRole="progressbar" accessibilityLabel="Loading categories">
-      {[0, 1, 2].map((row) => (
+      {Array.from({ length: rows }, (_, row) => (
         <View key={row} style={styles.row}>
           {[0, 1, 2].map((column) => (
             <View key={column} style={styles.tile}>

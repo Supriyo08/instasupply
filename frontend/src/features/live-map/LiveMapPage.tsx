@@ -1,4 +1,4 @@
-import { formatDistance, formatDuration, formatEta, toMillis } from '@instasupply/shared';
+import { formatClockET, formatDistance, formatDuration } from '@instasupply/shared';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
@@ -9,7 +9,7 @@ import { Toggle } from '@/components/ui/Form';
 import { RefreshIcon, RouteIcon, SearchIcon, TruckIcon } from '@/components/ui/icons';
 import { useToast } from '@/components/ui/Toast';
 import { presenceOf, useNow, useRoute } from '@/lib/data';
-import { call, errorMessage } from '@/lib/firebase/callables';
+import { call, errorMessage } from '@/lib/api';
 
 import { DriverList, sortDriverRows } from './DriverList';
 import { FleetMap } from './FleetMap';
@@ -37,7 +37,7 @@ export default function LiveMapPage() {
 
   const online = fleet.rows.filter((row) => presenceOf(row.location, now) === 'online').length;
   const selected = fleet.rows.find((row) => row.driver.id === selectedId) ?? null;
-  const elapsed = route.data ? (now - (toMillis(route.data.computedAt) ?? now)) / 1000 : 0;
+  const elapsed = route.data ? (now - route.data.computedAt) / 1000 : 0;
 
   const replan = async () => {
     if (!selectedId) return;
@@ -45,11 +45,11 @@ export default function LiveMapPage() {
     try {
       const result = await call('optimizeRoute', { driverId: selectedId });
       toast.success(
-        'Route re-optimized',
+        'Route re-planned',
         `${result.stops} stops · ${formatDuration(result.totalSeconds)} · ${formatDistance(result.totalMeters)}`,
       );
     } catch (error) {
-      toast.error("Couldn't optimize the route", errorMessage(error));
+      toast.error("Couldn't re-plan the route", errorMessage(error));
     } finally {
       setPlanning(false);
     }
@@ -84,7 +84,7 @@ export default function LiveMapPage() {
 
         <div className="flex-1 overflow-y-auto">
           {fleet.error ? (
-            <ErrorState error={fleet.error} className="m-4" />
+            <ErrorState error={fleet.error} onRetry={fleet.retry} className="m-4" />
           ) : fleet.loading && rows.length === 0 ? (
             <div className="p-6">
               <Spinner label="Loading fleet" />
@@ -98,17 +98,23 @@ export default function LiveMapPage() {
       </aside>
 
       <section className="relative min-h-0 flex-1">
-        <FleetMap
-          drivers={fleet.drivers}
-          locations={fleet.locations}
-          deliveries={fleet.openDeliveries}
-          now={now}
-          selectedDriverId={selectedId}
-          route={route.data}
-          onSelectDriver={setSelectedId}
-          showUnassigned={showUnassigned}
-          fitPaddingRight={selectedId ? 360 : 0}
-        />
+        <div
+          className="h-full"
+          role="img"
+          aria-label={`Live map: ${online} of ${fleet.rows.length} drivers online${showUnassigned ? ', with unassigned deliveries' : ''}${selected ? `, showing ${selected.driver.displayName}'s route` : ''}.`}
+        >
+          <FleetMap
+            drivers={fleet.drivers}
+            locations={fleet.locations}
+            deliveries={fleet.openDeliveries}
+            now={now}
+            selectedDriverId={selectedId}
+            route={route.data}
+            onSelectDriver={setSelectedId}
+            showUnassigned={showUnassigned}
+            fitPaddingRight={selectedId ? 360 : 0}
+          />
+        </div>
 
         {selected ? (
           <div className="absolute top-3 right-3 z-[1000] w-[min(22rem,calc(100%-1.5rem))] animate-slide-up rounded-2xl bg-white/95 shadow-pop ring-1 ring-slate-200 backdrop-blur">
@@ -139,7 +145,7 @@ export default function LiveMapPage() {
             {route.data?.stops.length ? (
               <ol className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
                 {route.data.stops.map((stop, index) => (
-                  <li key={stop.deliveryId}>
+                  <li key={`${stop.deliveryId}-${stop.kind}`}>
                     <Link
                       to={`/deliveries/${stop.deliveryId}`}
                       className="flex items-start gap-3 px-4 py-2.5 hover:bg-slate-50"
@@ -150,10 +156,10 @@ export default function LiveMapPage() {
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
                           <span className="truncate text-sm font-medium text-slate-900">
-                            {stop.customerName}
+                            {stop.kind === 'pickup' ? `Pickup · ${stop.title}` : stop.customerName}
                           </span>
                           <span className="shrink-0 text-xs font-medium text-slate-600 tabular-nums">
-                            {formatEta(stop.arrivalOffsetSeconds - elapsed, now)}
+                            {formatClockET(now + Math.max(0, stop.arrivalOffsetSeconds - elapsed) * 1000)}
                           </span>
                         </span>
                         <span className="mt-0.5 flex items-center gap-2">
@@ -167,7 +173,7 @@ export default function LiveMapPage() {
               </ol>
             ) : (
               <div className="flex items-center gap-2 px-4 py-4 text-sm text-slate-500">
-                <RouteIcon size={16} aria-hidden /> Assign deliveries to build a route.
+                <RouteIcon size={16} aria-hidden /> Assign jobs to build a route.
               </div>
             )}
           </div>

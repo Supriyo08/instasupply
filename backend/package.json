@@ -17,7 +17,7 @@
     "simulate": "tsx --import ./src/platform/dev/register.mjs --env-file-if-exists=.env scripts/simulate-driver.ts",
     "db": "tsx --import ./src/platform/dev/register.mjs --env-file-if-exists=.env scripts/db.ts",
     "test": "tsx --import ./src/platform/dev/register.mjs test/support/run.ts",
-    "test:platform": "NODE_ENV=test node --import tsx --import ./src/platform/dev/register.mjs --test --test-concurrency=4 test/platform/*.test.ts test/auth/*.test.ts",
+    "test:platform": "NODE_ENV=test node --import tsx --import ./src/platform/dev/register.mjs --test --test-concurrency=4 test/platform/*.test.ts test/auth/*.test.ts test/authorization/users.authz.test.ts test/authorization/files.authz.test.ts test/authorization/live-topics.authz.test.ts",
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {

@@ -6,12 +6,12 @@ import { BellIcon, InboxIcon } from '@/components/ui/icons';
 import { EmptyState } from '@/components/ui/Feedback';
 import { cn } from '@/lib/cn';
 import { useNow } from '@/lib/data';
-import type { WithId } from '@/lib/firebase/hooks';
-
-import { notificationLink } from './useNotifications';
+import { notificationHref, type LinkAudience } from './notification-links';
 
 interface NotificationBellProps {
-  notifications: WithId<AppNotification>[];
+  notifications: readonly AppNotification[];
+  /** Which link table of CLIENTS §6.4 applies. */
+  audience: LinkAudience;
   unreadCount: number;
   onMarkRead: (id: string) => Promise<void>;
   onMarkAllRead: () => Promise<void>;
@@ -21,6 +21,7 @@ interface NotificationBellProps {
 
 export function NotificationBell({
   notifications,
+  audience,
   unreadCount,
   onMarkRead,
   onMarkAllRead,
@@ -74,7 +75,7 @@ export function NotificationBell({
                     type="button"
                     onClick={() => {
                       if (!notification.read) void onMarkRead(notification.id);
-                      const link = notificationLink(notification);
+                      const link = notificationHref(notification, audience);
                       if (link) navigate(link);
                       close();
                     }}

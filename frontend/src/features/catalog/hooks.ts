@@ -1,24 +1,23 @@
-import { COLLECTIONS, type Category, type Product } from '@instasupply/shared';
-import { collection, orderBy, query } from 'firebase/firestore';
-import { useMemo } from 'react';
+import type { WithId } from '@instasupply/api-client';
+import { useLiveQuery, usePagedQuery } from '@instasupply/api-client/react';
+import type { Category, Product } from '@instasupply/shared';
 
-import { db } from '@/lib/firebase/app';
-import { useCollection, type WithId } from '@/lib/firebase/hooks';
+import { queries } from '@/lib/api';
 
-export type ProductRecord = WithId<Product>;
+export type ProductRecord = Product;
 export type CategoryRecord = WithId<Category>;
 
-/**
- * Every product, A–Z. The catalogue is a few hundred documents, so one listener plus client-side
- * filtering beats a query (and a composite index) per filter combination.
- */
-export function useProducts() {
-  const q = useMemo(() => query(collection(db, COLLECTIONS.products), orderBy('name')), []);
-  return useCollection<Product>(q);
+/** One store's whole catalogue, A–Z (portal and the store's Catalog tab): a complete live list. */
+export function useStoreProducts(storeId: string | null | undefined) {
+  return useLiveQuery(queries.portalCatalog(storeId));
 }
 
-/** Categories in shop order. */
+/** Ops catalogue across stores, filtered by the server (`storeId`, `categoryId`, `q`, `active`, …), paged. */
+export function useOpsProducts(filters: Record<string, string | number | boolean | null | undefined> = {}) {
+  return usePagedQuery(queries.opsCatalog(filters));
+}
+
+/** Categories in shop order (public, cached for every page). */
 export function useCategories() {
-  const q = useMemo(() => query(collection(db, COLLECTIONS.categories), orderBy('sortOrder')), []);
-  return useCollection<Category>(q);
+  return useLiveQuery(queries.categories());
 }

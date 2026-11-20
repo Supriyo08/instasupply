@@ -1,4 +1,4 @@
-import { validateDeliveryInput } from '@instasupply/shared';
+import { isInServiceArea, validateDeliveryInput } from '@instasupply/shared';
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
@@ -7,14 +7,18 @@ import { Callout } from '@/components/ui/Feedback';
 import { WarningIcon } from '@/components/ui/icons';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
+import { call, errorMessage, isNetworkError } from '@/lib/api';
 import { useDriverLocations, useDrivers, useNow, useOpenDeliveries } from '@/lib/data';
-import { call, errorMessage } from '@/lib/firebase/callables';
 
 import { DeliveryFormFields, type DraftErrors } from '../components/DeliveryFormFields';
 import { draftToInput, EMPTY_DRAFT, type DeliveryDraft } from '../components/delivery-form';
 import { DriverPicker } from '../components/DriverPicker';
 import { rankDrivers } from '../driver-suggestions';
 
+/**
+ * A manual delivery (dispatch's own trip, `kind: 'manual'`): site contact, drop-off pin and load. The pin
+ * is required, so the server never geocodes a bare street name to the first match in the world (R39).
+ */
 export function CreateDeliveryModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast();
   const navigate = useNavigate();
@@ -45,15 +49,25 @@ export function CreateDeliveryModal({ open, onClose }: { open: boolean; onClose:
   );
 
   const close = () => {
+    if (saving) return;
     setDraft(EMPTY_DRAFT);
     setErrors({});
     onClose();
   };
 
   const submit = async (openAfter: boolean) => {
+    if (saving) return;
     const result = validateDeliveryInput(draftToInput(draft));
     if (!result.ok) {
       setErrors(result.errors);
+      return;
+    }
+    if (!result.value.location) {
+      setErrors({ location: 'Place the drop-off pin on the map.' });
+      return;
+    }
+    if (!isInServiceArea(result.value.location)) {
+      setErrors({ location: 'The pin is outside the Greater Toronto Area service area.' });
       return;
     }
     setErrors({});
@@ -63,24 +77,32 @@ export function CreateDeliveryModal({ open, onClose }: { open: boolean; onClose:
       const failure = response.errors[0];
       if (failure) {
         setErrors({ form: failure.message });
+        setSaving(false);
         return;
       }
       const created = response.created[0]!;
       const driver = drivers.data.find((item) => item.id === result.value.driverId);
+      const pin = draft.locationLabel ?? result.value.address;
       toast.show({
         tone: 'success',
         title: `${created.orderId} created`,
-        description: driver ? `Assigned to ${driver.displayName}.` : 'Added to the unassigned queue.',
+        description: `${driver ? `Assigned to ${driver.displayName}` : 'In the unassigned queue'} · pin at ${pin}.`,
         action: openAfter
           ? undefined
           : { label: 'Open', onClick: () => navigate(`/deliveries/${created.id}`) },
       });
-      close();
+      setSaving(false);
+      setDraft(EMPTY_DRAFT);
+      onClose();
       if (openAfter) navigate(`/deliveries/${created.id}`);
     } catch (error) {
-      setErrors({ form: errorMessage(error) });
-    } finally {
       setSaving(false);
+      // createDeliveries is not retry-safe: after a lost answer the delivery may exist already.
+      setErrors({
+        form: isNetworkError(error)
+          ? 'The connection dropped before the server answered. Check Deliveries before trying again: the delivery may have been created.'
+          : errorMessage(error),
+      });
     }
   };
 
@@ -89,11 +111,12 @@ export function CreateDeliveryModal({ open, onClose }: { open: boolean; onClose:
       open={open}
       onClose={close}
       size="xl"
+      dismissOnBackdrop={false}
       title="New delivery"
-      description="Customer, drop-off and package details. You can assign a driver now or later."
+      description="A dispatch trip outside the marketplace: site contact, drop-off pin and load. Assign a driver now or later."
       footer={
         <>
-          <Button variant="secondary" onClick={close}>
+          <Button variant="secondary" onClick={close} disabled={saving}>
             Cancel
           </Button>
           <Button variant="secondary" loading={saving} onClick={() => void submit(true)}>
@@ -113,13 +136,13 @@ export function CreateDeliveryModal({ open, onClose }: { open: boolean; onClose:
         ) : null}
         <DeliveryFormFields draft={draft} errors={errors} onChange={patch} />
 
-        <section className="rounded-xl border border-slate-200 p-4">
+        <section className="rounded-xl border border-slate-200 p-4" aria-label="Assign a driver now">
           <div className="mb-2 flex items-center justify-between gap-2">
             <div>
               <p className="text-sm font-semibold text-slate-900">Assign a driver now</p>
               <p className="text-xs text-slate-500">
                 {draft.location
-                  ? 'Ranked by distance to the pin, live status and current load.'
+                  ? 'Ranked by distance to the pin, live status and current jobs.'
                   : 'Drop the pin to rank drivers by distance.'}
               </p>
             </div>

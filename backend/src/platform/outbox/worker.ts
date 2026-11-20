@@ -28,13 +28,16 @@ export function backoffMs(attempts: number, random: () => number = Math.random):
   return Math.round(base * (0.8 + random() * 0.4));
 }
 
-/** Statement (m) of §3.5: give a claimed row back, or finish it as done when a newer pending row exists. */
+/**
+ * Statement (m) of §3.5: give a claimed row back, or finish it as done when a newer pending row exists.
+ * The casts are needed: without them PostgreSQL infers $5 as text from the CASE and rejects the update.
+ */
 export const RELEASE_SQL = `UPDATE outbox o SET
   status      = CASE WHEN o.dedupe_key IS NOT NULL AND EXISTS (
                        SELECT 1 FROM outbox p WHERE p.dedupe_key = o.dedupe_key AND p.status = 'pending' AND p.id <> o.id)
-                     THEN 'done' ELSE $2 END,
-  run_at      = $3, locked_at = NULL, locked_by = NULL, last_error = $4,
-  finished_at = CASE WHEN $2 = 'dead' THEN $5 ELSE NULL END
+                     THEN 'done' ELSE $2::text END,
+  run_at      = $3::timestamptz, locked_at = NULL, locked_by = NULL, last_error = $4::text,
+  finished_at = CASE WHEN $2::text = 'dead' THEN $5::timestamptz ELSE NULL END
 WHERE o.id = $1 AND o.status IN ('processing', 'dead')
 RETURNING status`;
 

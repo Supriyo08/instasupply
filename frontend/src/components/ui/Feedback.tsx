@@ -1,3 +1,4 @@
+import { describeError } from '@instasupply/api-client';
 import type { ReactNode } from 'react';
 
 import { cn } from '@/lib/cn';
@@ -50,8 +51,22 @@ export function EmptyState({
   );
 }
 
-export function ErrorState({ error, className }: { error: Error | string; className?: string }) {
-  const message = typeof error === 'string' ? error : error.message;
+/**
+ * "Couldn't load" box. `error` may be an `ApiError`, any `Error` or a message; pass `onRetry` (the
+ * query's `retry`) to offer "Try again".
+ */
+export function ErrorState({
+  error,
+  onRetry,
+  title = "Couldn't load this data",
+  className,
+}: {
+  error: unknown;
+  onRetry?: () => void;
+  title?: string;
+  className?: string;
+}) {
+  const message = typeof error === 'string' ? error : describeError(error);
   return (
     <div
       className={cn(
@@ -61,10 +76,19 @@ export function ErrorState({ error, className }: { error: Error | string; classN
       role="alert"
     >
       <ErrorIcon size={18} className="mt-0.5 shrink-0" aria-hidden />
-      <div>
-        <p className="font-medium">Couldn't load this data</p>
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">{title}</p>
         <p className="mt-0.5 text-rose-700">{message}</p>
       </div>
+      {onRetry ? (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="shrink-0 rounded-lg px-2.5 py-1 text-sm font-semibold text-rose-700 hover:bg-rose-100"
+        >
+          Try again
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -75,7 +99,7 @@ export function Callout({
   title,
   children,
 }: {
-  tone?: 'info' | 'warning' | 'success';
+  tone?: 'info' | 'warning' | 'success' | 'danger';
   icon?: IconComponent;
   title?: string;
   children: ReactNode;
@@ -84,6 +108,7 @@ export function Callout({
     info: 'bg-brand-50 text-brand-900 ring-brand-200',
     warning: 'bg-amber-50 text-amber-900 ring-amber-200',
     success: 'bg-emerald-50 text-emerald-900 ring-emerald-200',
+    danger: 'bg-rose-50 text-rose-900 ring-rose-200',
   };
   return (
     <div className={cn('flex items-start gap-3 rounded-xl p-3.5 text-sm ring-1', tones[tone])}>
