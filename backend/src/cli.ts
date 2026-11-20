@@ -6,6 +6,7 @@ import { ConfigError, loadConfig } from './config/env';
 import { runCreateAdmin } from './cli/create-admin';
 import { runMigrate } from './cli/migrate';
 import { runRevokeSessions } from './cli/revoke-sessions';
+import { runSeed } from './cli/seed';
 import { runStorageCors } from './cli/storage-cors';
 
 const USAGE = `usage: cli <command>
@@ -13,7 +14,7 @@ const USAGE = `usage: cli <command>
   create-admin --email <e> --name <n>    create the first administrator, print a set-password link
   revoke-sessions --email <e>            sign one account out everywhere
   storage-cors                           set the bucket's CORS rule from CORS_ORIGINS
-  seed --demo [--reset] [--at <ISO>]     demo data (written by the seed workstream)`;
+  seed --demo [--reset] [--at <ISO>]     demo stores, products, accounts and orders`;
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...args] = argv;
@@ -42,9 +43,7 @@ async function main(argv: string[]): Promise<number> {
     case 'storage-cors':
       return runStorageCors(config);
     case 'seed':
-      // backend/src/cli/seed.ts belongs to the seed workstream (§15.2) and does not exist yet.
-      console.error('seed is not available yet: backend/src/cli/seed.ts is written by the seed workstream.');
-      return 1;
+      return runSeed(config, args);
     default:
       console.error(`unknown command "${command}"\n${USAGE}`);
       return 1;
