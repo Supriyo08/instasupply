@@ -9,8 +9,32 @@ import { defineRoute, idParam } from '../../platform/http/route';
 import { requireProfile } from './serializers';
 import { findUserById, type UserRecord } from './users.repository';
 
+const ROLES = ['admin', 'dispatcher', 'driver', 'customer', 'supplier'] as const;
+
+/**
+ * One role or several, comma-separated (`?role=admin,dispatcher`): the console's Team page lists every
+ * staff account in one request, and the api-client joins array parameters with commas.
+ */
+const roleList = z.preprocess(
+  (value) =>
+    typeof value === 'string'
+      ? value
+          .split(',')
+          .map((part) => part.trim())
+          .filter(Boolean)
+      : Array.isArray(value)
+        ? value.flatMap((part) =>
+            String(part)
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+          )
+        : value,
+  z.array(z.enum(ROLES)).min(1).max(ROLES.length),
+);
+
 const listQuery = pageQuerySchema.extend({
-  role: z.enum(['admin', 'dispatcher', 'driver', 'customer', 'supplier']).optional(),
+  role: roleList.optional(),
   status: z.enum(['pending', 'active', 'suspended']).optional(),
   cityId: z.string().min(1).max(40).optional(),
   storeId: z.string().min(1).max(40).optional(),
@@ -34,7 +58,8 @@ export function registerUserRoutes(app: FastifyInstance): void {
           caller.role === 'supplier' &&
           caller.isActive &&
           caller.storeRole === 'owner' &&
-          query.role === 'supplier' &&
+          query.role?.length === 1 &&
+          query.role[0] === 'supplier' &&
           query.storeId === caller.storeId &&
           query.cityId === undefined;
         if (!ownTeam) permissionDenied();
@@ -46,7 +71,7 @@ export function registerUserRoutes(app: FastifyInstance): void {
         values.push(value);
         where.push(sql.replace('?', `$${values.length}`));
       };
-      if (query.role) add('role = ?', query.role);
+      if (query.role) add('role = ANY(?::text[])', [...new Set(query.role)]);
       if (query.status) add('status = ?', query.status);
       if (query.cityId) add('city_id = ?', query.cityId);
       if (query.storeId) add('store_id = ?', query.storeId);

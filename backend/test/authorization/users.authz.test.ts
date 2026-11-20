@@ -78,6 +78,24 @@ describe('users (MARKETPLACE §6.2 → PLATFORM §7.3)', () => {
     assert.equal((await get(ctx, '/users', customerA.accessToken)).status, 403);
   });
 
+  test('staff list several roles at once (the Team page asks for admin,dispatcher)', async () => {
+    const list = await get<{ items: { role: string }[] }>(
+      ctx,
+      '/users?role=admin,dispatcher',
+      admin.accessToken,
+    );
+    assert.equal(list.status, 200);
+    const roles = new Set(list.body.items.map((item) => item.role));
+    assert.ok(roles.has('admin') && roles.has('dispatcher'));
+    assert.ok([...roles].every((role) => role === 'admin' || role === 'dispatcher'));
+    assert.equal((await get(ctx, '/users?role=admin,boss', admin.accessToken)).status, 400);
+    // A supplier owner may still list only their own store's suppliers, one role.
+    assert.equal(
+      (await get(ctx, '/users?role=supplier,customer&storeId=store-x', admin.accessToken)).status,
+      200,
+    );
+  });
+
   test('a profile never carries authentication columns', async () => {
     const me = await get<{ profile: Record<string, unknown> }>(ctx, '/me', customerA.accessToken);
     const keys = Object.keys(me.body.profile);
